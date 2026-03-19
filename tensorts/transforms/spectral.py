@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import scipy 
 
 from ..core.channels import ChannelIndex
 from ..core.dims import Dim
