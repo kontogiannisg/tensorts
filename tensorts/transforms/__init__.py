@@ -18,6 +18,10 @@ from .features import (
     SpectralRolloff,
     StatisticalFeatures,
 )
+from .functional import (
+    FunctionTransform,
+    StatefulFunctionTransform,
+)
 from .preprocessing import (
     Interpolate,
     LabelEncoder,
@@ -52,6 +56,8 @@ __all__ = [
     # Base
     "Transform", "Pipeline", "ChannelTransform", "ChannelSelect",
     "FrameFeature", "FrameFeatureBank", "Scope",
+    # Functional
+    "FunctionTransform", "StatefulFunctionTransform",
     # Preprocessing
     "StandardScaler", "MinMaxScaler", "RobustScaler", "Interpolate", "LabelEncoder",
     # Temporal
