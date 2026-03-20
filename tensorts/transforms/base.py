@@ -107,8 +107,8 @@ class Transform(ABC):
         )
         return f"{self.__class__.__name__}({params})"
 
-    def get_params(self) -> dict[str, Any]:
-        """Return constructor parameters (for serialization / repr)."""
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        """Return constructor parameters (sklearn-compatible)."""
         import inspect
         sig = inspect.signature(self.__class__.__init__)
         params = {}
@@ -120,6 +120,18 @@ class Transform(ABC):
             elif hasattr(self, f"_{name}"):
                 params[name] = getattr(self, f"_{name}")
         return params
+
+    def set_params(self, **params) -> "Transform":
+        """Set parameters — enables sklearn GridSearchCV compatibility."""
+        valid = self.get_params(deep=False)
+        for key, value in params.items():
+            if key not in valid:
+                raise ValueError(
+                    f"Invalid parameter {key!r} for {self.__class__.__name__}. "
+                    f"Valid parameters: {sorted(valid.keys())}."
+                )
+            setattr(self, key, value)
+        return self
 
 
 # ======================================================================
@@ -196,8 +208,35 @@ class Pipeline(Transform):
             raise KeyError(f"Step {key!r} not found.")
         return self.steps[key][1]
 
-    def get_params(self) -> dict[str, Any]:
-        return {"steps": [(n, s.__class__.__name__) for n, s in self.steps]}
+    @property
+    def named_steps(self) -> dict[str, Transform]:
+        """Dict of step name → transform (sklearn-style access)."""
+        return dict(self.steps)
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        params: dict[str, Any] = {"steps": self.steps}
+        if deep:
+            for name, step in self.steps:
+                params[name] = step
+                for key, val in step.get_params(deep=True).items():
+                    params[f"{name}__{key}"] = val
+        return params
+
+    def set_params(self, **params) -> "Pipeline":
+        """Set parameters using sklearn nested 'step__param' format."""
+        for key, value in params.items():
+            if "__" in key:
+                step_name, param_rest = key.split("__", 1)
+                self[step_name].set_params(**{param_rest: value})
+            elif key == "steps":
+                self._validate_steps(value)
+                self.steps = value
+            else:
+                raise ValueError(
+                    f"Invalid parameter {key!r} for Pipeline. "
+                    "Use 'steps' or 'step_name__param_name' format."
+                )
+        return self
 
 
 # ======================================================================
@@ -395,127 +434,21 @@ class ChannelSelect(Transform):
 
         return ChannelTransform._concat_channels(parts, X, channel_names)
 
-    def get_params(self) -> dict[str, Any]:
-        return {"channels": self.channel_key, "transform": repr(self.inner)}
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        params: dict[str, Any] = {"channels": self.channel_key, "transform": self.inner}
+        if deep:
+            for k, v in self.inner.get_params(deep=True).items():
+                params[f"transform__{k}"] = v
+        return params
 
-
-# ======================================================================
-# FrameFeature base + FrameFeatureBank
-# ======================================================================
-
-class FrameFeature(ABC):
-    """A single per-frame feature extractor.
-
-    Subclasses implement ``extract`` which receives all frames at once
-    (vectorized) and an optional cache of shared intermediates.
-    """
-
-    names: list[str] = []
-    needs: set[str] = set()
-
-    @abstractmethod
-    def extract(self, frames: np.ndarray, cache: dict) -> np.ndarray:
-        """Extract features from frames.
-
-        Parameters
-        ----------
-        frames : ndarray of shape (N_total, W, C)
-            All frames from all samples, flattened.
-        cache : dict
-            Shared intermediates ('fft', 'power', 'magnitude', etc.).
-
-        Returns
-        -------
-        ndarray of shape (N_total, K_i * C) or (N_total, K_i)
-            Feature values.  K_i = len(self.names).
-        """
-        ...
-
-
-class FrameFeatureBank(Transform):
-    """Apply multiple FrameFeature extractors per frame, sharing intermediates.
-
-    Input:  (BATCH, WINDOW/FRAME, TIME, CHANNEL)
-    Output: (BATCH, WINDOW/FRAME, FEATURE)
-
-    Shared cache keys computed automatically based on feature ``needs``:
-    - ``'fft'``: ``np.fft.rfft(frames, axis=1)``
-    - ``'magnitude'``: ``np.abs(cache['fft'])``
-    - ``'power'``: ``magnitude ** 2``
-    """
-
-    input_dims = None  # flexible — works with WINDOW or FRAME
-    scope = Scope.PER_SAMPLE
-
-    def __init__(self, features: list[FrameFeature]) -> None:
-        super().__init__()
-        self.features = features
-
-    def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "FrameFeatureBank":
-        self._is_fitted = True
+    def set_params(self, **params) -> "ChannelSelect":
+        for key, value in params.items():
+            if key == "channels":
+                self.channel_key = value
+            elif key == "transform":
+                self.inner = value
+            elif key.startswith("transform__"):
+                self.inner.set_params(**{key[len("transform__"):]: value})
+            else:
+                raise ValueError(f"Invalid parameter {key!r} for ChannelSelect.")
         return self
-
-    def transform(self, X: TimeTensor) -> TimeTensor:
-        data = X.data
-        # Expect (B, N, W, C) or similar with a window/frame + time axis
-        if data.ndim < 3:
-            raise ValueError(
-                f"FrameFeatureBank expects at least 3D input, got {data.ndim}D."
-            )
-
-        # Identify axes: the last is CHANNEL, second-to-last is TIME (frame samples),
-        # everything else is batch dims we flatten
-        original_shape = data.shape
-        C = original_shape[-1]
-        W = original_shape[-2]
-        leading = original_shape[:-2]
-        N_total = int(np.prod(leading))
-
-        frames = data.reshape(N_total, W, C)
-
-        # Build shared cache
-        all_needs = set()
-        for feat in self.features:
-            all_needs |= feat.needs
-
-        cache: dict[str, np.ndarray] = {}
-        if "fft" in all_needs or "magnitude" in all_needs or "power" in all_needs:
-            cache["fft"] = np.fft.rfft(frames, axis=1)
-        if "magnitude" in all_needs or "power" in all_needs:
-            cache["magnitude"] = np.abs(cache["fft"])
-        if "power" in all_needs:
-            cache["power"] = cache["magnitude"] ** 2
-
-        # Extract features
-        results = []
-        feat_names = []
-        for feat in self.features:
-            val = feat.extract(frames, cache)
-            if val.ndim == 1:
-                val = val[:, np.newaxis]
-            results.append(val)
-            feat_names.extend(feat.names)
-
-        out = np.concatenate(results, axis=-1)  # (N_total, K)
-        out = out.reshape(*leading, -1)          # (B, N, K) or (B, K)
-
-        # Determine output dims
-        out_dims = list(X.dims)
-        # Remove the TIME and CHANNEL dims that were consumed
-        # Keep everything up to the frame/window dim, replace rest with FEATURE
-        if X.has_dim(Dim.CHANNEL):
-            ch_idx = out_dims.index(Dim.CHANNEL)
-            out_dims.pop(ch_idx)
-        if X.has_dim(Dim.TIME):
-            t_idx = out_dims.index(Dim.TIME)
-            out_dims.pop(t_idx)
-        out_dims.append(Dim.FEATURE)
-
-        return X.with_data(
-            out,
-            dims=tuple(out_dims),
-            channels=ChannelIndex(feat_names),
-        )
-
-    def get_params(self) -> dict[str, Any]:
-        return {"features": [f.__class__.__name__ for f in self.features]}

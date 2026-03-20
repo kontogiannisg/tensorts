@@ -11,8 +11,13 @@ Transforms:
     StandardScaler, MinMaxScaler, RobustScaler, Interpolate, LabelEncoder,
     SlidingWindow, Pad, Truncate, Resample,
     PreEmphasis, ButterworthFilter, BandpassFilter, STFT, MelSpectrogram, LogTransform,
-    StatisticalFeatures, RollingFeatures, FrameFeatureBank,
+    FunctionTransform, StatefulFunctionTransform,
+    FeatureExtractor, make_statistical_extractor,
     Flatten, Reshape, Transpose, PCA, Squeeze, Unsqueeze
+
+Sklearn integration:
+    SklearnWrapper — wraps a tensorts Pipeline + sklearn estimator for use with
+    cross_val_score, GridSearchCV, cross_validate, etc.
 
 Utilities:
     temporal_split, stratified_temporal_split, kfold_temporal,
@@ -26,17 +31,13 @@ from .core import ChannelIndex, Dim, DimSchema, TimeTensor
 
 # Transforms (public API)
 from .transforms import (
-    MFCC,
-    RMS,
     STFT,
-    ZCR,
     BandpassFilter,
     ButterworthFilter,
     ChannelSelect,
     ChannelTransform,
+    FeatureExtractor,
     Flatten,
-    FrameFeature,
-    FrameFeatureBank,
     FunctionTransform,
     Interpolate,
     LabelEncoder,
@@ -50,22 +51,20 @@ from .transforms import (
     Resample,
     Reshape,
     RobustScaler,
-    RollingFeatures,
     Scope,
     SlidingWindow,
-    SpectralCentroid,
-    SpectralEntropy,
-    SpectralFlatness,
-    SpectralRolloff,
     Squeeze,
     StandardScaler,
     StatefulFunctionTransform,
-    StatisticalFeatures,
     Transform,
     Transpose,
     Truncate,
     Unsqueeze,
+    make_statistical_extractor,
 )
+
+# Sklearn integration
+from .compat import SklearnWrapper
 
 # IO
 from .io import from_csv, from_dataframe, from_numpy, to_dataframe, to_numpy, to_sklearn

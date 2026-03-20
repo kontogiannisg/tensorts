@@ -1,24 +1,13 @@
 from .base import (
     ChannelSelect,
     ChannelTransform,
-    FrameFeature,
-    FrameFeatureBank,
     Pipeline,
     Scope,
     Transform,
 )
-from .features import (
-    MFCC,
-    RMS,
-    ZCR,
-    RollingFeatures,
-    SpectralCentroid,
-    SpectralEntropy,
-    SpectralFlatness,
-    SpectralRolloff,
-    StatisticalFeatures,
-)
+from .features import make_statistical_extractor
 from .functional import (
+    FeatureExtractor,
     FunctionTransform,
     StatefulFunctionTransform,
 )
@@ -54,19 +43,17 @@ from .temporal import (
 
 __all__ = [
     # Base
-    "Transform", "Pipeline", "ChannelTransform", "ChannelSelect",
-    "FrameFeature", "FrameFeatureBank", "Scope",
+    "Transform", "Pipeline", "ChannelTransform", "ChannelSelect", "Scope",
     # Functional
-    "FunctionTransform", "StatefulFunctionTransform",
+    "FunctionTransform", "StatefulFunctionTransform", "FeatureExtractor",
+    # Features
+    "make_statistical_extractor",
     # Preprocessing
     "StandardScaler", "MinMaxScaler", "RobustScaler", "Interpolate", "LabelEncoder",
     # Temporal
     "SlidingWindow", "Pad", "Truncate", "Resample",
     # Spectral
     "PreEmphasis", "ButterworthFilter", "BandpassFilter", "STFT", "MelSpectrogram", "LogTransform",
-    # Features
-    "StatisticalFeatures", "RollingFeatures",
-    "ZCR", "RMS", "SpectralEntropy", "SpectralCentroid", "SpectralRolloff", "SpectralFlatness", "MFCC",
     # Shape
     "Flatten", "Reshape", "Transpose", "PCA", "Squeeze", "Unsqueeze",
 ]
