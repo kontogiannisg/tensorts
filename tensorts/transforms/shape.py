@@ -241,7 +241,7 @@ class PCA(Transform):
             channels=ChannelIndex(feat_names),
         )
 
-    def get_params(self) -> dict[str, Any]:
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
         return {"n_components": self.n_components, "whiten": self.whiten}
 
 

@@ -455,6 +455,9 @@ class TimeTensor:
 
     def __getitem__(self, key) -> "TimeTensor":
         """Slice along the batch axis."""
+        # Handle tuple keys like X[indices, ...] from sklearn's _safe_indexing
+        if isinstance(key, tuple):
+            key = key[0]
         if self.is_ragged:
             if isinstance(key, (int, np.integer)):
                 # Single sample — return as a 1-sample ragged
