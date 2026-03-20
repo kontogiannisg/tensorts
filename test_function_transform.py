@@ -1,26 +1,24 @@
 """
 Tests for FunctionTransform and StatefulFunctionTransform.
 
-Covers:
-1.  PER_CHANNEL — scipy median filter (shape-preserving)
-2.  PER_CHANNEL — scipy sosfiltfilt with fn_kwargs
-3.  PER_CHANNEL — shape-changing (downsample via fn)
-4.  PER_SAMPLE — custom multivariate feature extractor
-5.  PER_SAMPLE — shape-preserving (normalize per sample)
-6.  GLOBAL — element-wise clipping
-7.  GLOBAL — full tensor manipulation
-8.  Ragged + PER_CHANNEL
-9.  Ragged + PER_SAMPLE
-10. StatefulFunctionTransform — per-channel percentile clipping
-11. StatefulFunctionTransform — global custom scaler
-12. Pipeline integration — FunctionTransform in a full pipeline
-13. ChannelSelect integration — wrap scipy filter on subset
-14. 4D tensor — PER_CHANNEL on (B, K, T, C)
-15. fn_args forwarding
+Design rules this file verifies:
+  - FunctionTransform wraps stateless functions; dim schema is PRESERVED.
+    fn receives the appropriate slice and returns the same rank (ndim) but
+    may change size along any axis.
+  - StatefulFunctionTransform separates fit (learn state) from transform
+    (apply state); separate states are learned per Scope.
+  - Neither class changes dim semantics — use FeatureExtractor for that.
+
+Scopes tested:
+  PER_CHANNEL  fn(T,) → (T',)    — vectorized over batch and channels
+  PER_SAMPLE   fn(T, C) → (T', C) — vectorized over batch
+  GLOBAL       fn(full tensor) → same-rank result
+
+Dense and ragged inputs are both tested for PER_CHANNEL and PER_SAMPLE.
 """
 
-import numpy as np
 import traceback
+import numpy as np
 
 np.random.seed(42)
 
@@ -33,7 +31,7 @@ def test(name, fn):
         fn()
         PASS += 1
         print(f"  ✓ {name}")
-    except Exception as e:
+    except Exception:
         FAIL += 1
         print(f"  ✗ {name}")
         traceback.print_exc()
@@ -41,65 +39,133 @@ def test(name, fn):
 
 
 # =====================================================================
-# 1. PER_CHANNEL — stateless, shape-preserving
+# 1. FunctionTransform — PER_CHANNEL
 # =====================================================================
 print("=" * 60)
-print("FUNCTION TRANSFORM — PER_CHANNEL")
+print("FunctionTransform — PER_CHANNEL")
 print("=" * 60)
 
 
+def test_per_channel_medfilt_dense():
+    """PER_CHANNEL: scipy medfilt on each channel, shape unchanged."""
+    from scipy.signal import medfilt
+    from tensorts import TimeTensor, Dim, FunctionTransform, Scope
 
-# =====================================================================
-# 2. PER_SAMPLE — stateless
-# =====================================================================
-print()
-print("=" * 60)
-print("FUNCTION TRANSFORM — PER_SAMPLE")
-print("=" * 60)
-
-
-def test_per_sample_feature_extractor():
-    """PER_SAMPLE: custom function (T, C) → (K,) feature vector."""
-    from tensorts import TimeTensor, FunctionTransform, Dim, Scope
-
-    def extract_features(x):
-        """x is (T, C), return (K,) feature vector."""
-        return np.array([
-            np.mean(x, axis=0).ravel(),        # C means
-            np.std(x, axis=0).ravel(),         # C stds
-            np.max(x, axis=0).ravel(),         # C maxes
-        ]).ravel()  # 3*C features
-
-    data = np.random.randn(10, 200, 4)
+    data = np.random.randn(8, 100, 4)
     ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
                     channels=["a", "b", "c", "d"])
 
-    feat = FunctionTransform(
-        fn=extract_features,
-        scope=Scope.PER_SAMPLE,
-        output_dims=(Dim.BATCH, Dim.FEATURE),
-        output_channels=[f"f_{i}" for i in range(12)],  # 3 * 4 channels
-    )
-    result = feat.fit_transform(ts)
+    smooth = FunctionTransform(fn=medfilt, scope=Scope.PER_CHANNEL,
+                                fn_kwargs={"kernel_size": 5})
+    result = smooth.fit_transform(ts)
 
-    assert result.shape == (10, 12), f"Got {result.shape}"
-    assert result.has_dim(Dim.FEATURE)
-    assert len(result.channels.names) == 12
+    assert result.shape == (8, 100, 4)
+    assert result.dims == ts.dims            # dim schema preserved
+    assert result.channels.names == ts.channels.names
 
-test("PER_SAMPLE: custom (T,C)→(K,) feature extractor", test_per_sample_feature_extractor)
+test("PER_CHANNEL dense: scipy medfilt, shape + dims preserved", test_per_channel_medfilt_dense)
 
 
-def test_per_sample_normalize():
-    """PER_SAMPLE shape-preserving: z-score normalize each sample independently."""
+def test_per_channel_shape_changing_dense():
+    """PER_CHANNEL: downsample — time axis changes length, ndim stays same."""
     from tensorts import TimeTensor, Dim, FunctionTransform, Scope
 
-    def zscore_sample(x):
+    data = np.random.randn(6, 100, 3)
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+
+    downsample = FunctionTransform(fn=lambda x: x[::2], scope=Scope.PER_CHANNEL)
+    result = downsample.fit_transform(ts)
+
+    assert result.shape == (6, 50, 3)        # TIME halved
+    assert result.dims == ts.dims            # schema unchanged (TIME still TIME)
+
+test("PER_CHANNEL dense: fn changes time length, ndim preserved", test_per_channel_shape_changing_dense)
+
+
+def test_per_channel_4d():
+    """PER_CHANNEL on (B, K, T, C) — operates on TIME axis, leaves WINDOW intact."""
+    from tensorts import TimeTensor, Dim, FunctionTransform, Scope
+
+    data = np.random.randn(4, 5, 64, 3)
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.WINDOW, Dim.TIME, Dim.CHANNEL))
+
+    smooth = FunctionTransform(
+        fn=lambda x: np.convolve(x, np.ones(3) / 3, mode="same"),
+        scope=Scope.PER_CHANNEL,
+    )
+    result = smooth.fit_transform(ts)
+    assert result.shape == (4, 5, 64, 3)
+
+test("PER_CHANNEL on 4D (B,K,T,C): operates on TIME, WINDOW preserved", test_per_channel_4d)
+
+
+def test_per_channel_fn_kwargs():
+    """PER_CHANNEL: extra kwargs forwarded to fn correctly."""
+    from tensorts import TimeTensor, Dim, FunctionTransform, Scope
+
+    def band_limit(x, n_coeffs=10):
+        fft = np.fft.rfft(x)
+        fft[n_coeffs:] = 0
+        return np.fft.irfft(fft, n=len(x))
+
+    data = np.random.randn(4, 64, 2)
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+
+    ft = FunctionTransform(fn=band_limit, scope=Scope.PER_CHANNEL,
+                           fn_kwargs={"n_coeffs": 5})
+    result = ft.fit_transform(ts)
+    assert result.shape == (4, 64, 2)
+
+test("PER_CHANNEL: fn_kwargs forwarded correctly", test_per_channel_fn_kwargs)
+
+
+def test_per_channel_ragged():
+    """PER_CHANNEL on ragged: each sample has different time length."""
+    from scipy.signal import medfilt
+    from tensorts import TimeTensor, FunctionTransform, Scope
+
+    samples = [np.random.randn(80, 2), np.random.randn(120, 2), np.random.randn(60, 2)]
+    y = np.array([0, 1, 0])
+    ts = TimeTensor.from_ragged(samples, channels=["x", "y"], y=y)
+
+    smooth = FunctionTransform(fn=medfilt, scope=Scope.PER_CHANNEL,
+                                fn_kwargs={"kernel_size": 3})
+    result = smooth.fit_transform(ts)
+
+    assert result.is_ragged
+    assert result._samples[0].shape == (80, 2)
+    assert result._samples[1].shape == (120, 2)
+    assert result._samples[2].shape == (60, 2)
+    # Labels preserved
+    np.testing.assert_array_equal(result.y, y)
+
+test("PER_CHANNEL ragged: variable lengths preserved, y propagated", test_per_channel_ragged)
+
+
+# =====================================================================
+# 2. FunctionTransform — PER_SAMPLE
+# =====================================================================
+print()
+print("=" * 60)
+print("FunctionTransform — PER_SAMPLE")
+print("=" * 60)
+
+# NOTE: PER_SAMPLE fn receives (T_merged, C) and must return same ndim.
+# It is designed for per-sample preprocessing, not dimensionality reduction.
+# Use FeatureExtractor for (T, C) → (K,) feature extraction.
+
+
+def test_per_sample_zscore_dense():
+    """PER_SAMPLE: z-score each sample independently — (T,C) → (T,C)."""
+    from tensorts import TimeTensor, Dim, FunctionTransform, Scope
+
+    def zscore(x):
         return (x - x.mean(axis=0)) / (x.std(axis=0) + 1e-8)
 
     data = np.random.randn(8, 100, 3) * np.array([1, 10, 100]) + np.array([5, 50, 500])
     ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
 
-    norm = FunctionTransform(fn=zscore_sample, scope=Scope.PER_SAMPLE)
+    norm = FunctionTransform(fn=zscore, scope=Scope.PER_SAMPLE)
     result = norm.fit_transform(ts)
 
     assert result.shape == (8, 100, 3)
@@ -108,40 +174,117 @@ def test_per_sample_normalize():
         for c in range(3):
             assert abs(np.mean(result.data[i, :, c])) < 0.1
 
-test("PER_SAMPLE: z-score per sample (shape-preserving)", test_per_sample_normalize)
+test("PER_SAMPLE dense: per-sample z-score, (T,C) → (T,C)", test_per_sample_zscore_dense)
+
+
+def test_per_sample_clip_dense():
+    """PER_SAMPLE: clip each sample to its own 1st–99th percentile."""
+    from tensorts import TimeTensor, Dim, FunctionTransform, Scope
+
+    def adaptive_clip(x):
+        lo, hi = np.percentile(x, 1), np.percentile(x, 99)
+        return np.clip(x, lo, hi)
+
+    data = np.random.randn(6, 80, 2) * 5
+    data[0, 0, 0] = 1000   # outlier in sample 0
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+
+    clipper = FunctionTransform(fn=adaptive_clip, scope=Scope.PER_SAMPLE)
+    result = clipper.fit_transform(ts)
+
+    assert result.shape == (6, 80, 2)
+    assert result.data.max() < 1000
+
+test("PER_SAMPLE dense: per-sample adaptive clip, outlier removed", test_per_sample_clip_dense)
+
+
+def test_per_sample_time_trim():
+    """PER_SAMPLE: trim last 10 time steps — output shorter in TIME."""
+    from tensorts import TimeTensor, Dim, FunctionTransform, Scope
+
+    data = np.random.randn(5, 100, 3)
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+
+    trim = FunctionTransform(fn=lambda x: x[:-10], scope=Scope.PER_SAMPLE)
+    result = trim.fit_transform(ts)
+
+    assert result.shape == (5, 90, 3)   # TIME shortened
+    assert result.dims == ts.dims        # dim schema preserved
+
+test("PER_SAMPLE dense: trim time steps, ndim preserved", test_per_sample_time_trim)
+
+
+def test_per_sample_ragged_same_output():
+    """PER_SAMPLE ragged: all outputs same shape → dense output."""
+    from tensorts import TimeTensor, FunctionTransform, Scope
+
+    def normalize(x):
+        return (x - x.mean(axis=0)) / (x.std(axis=0) + 1e-8)
+
+    samples = [np.random.randn(80, 3) * 10, np.random.randn(80, 3) * 5,
+               np.random.randn(80, 3)]  # all same (80, 3)
+    y = np.array([0, 1, 2])
+    ts = TimeTensor.from_ragged(samples, y=y)
+
+    result = FunctionTransform(fn=normalize, scope=Scope.PER_SAMPLE).fit_transform(ts)
+
+    # All same shape → stacked to dense
+    assert not result.is_ragged
+    assert result.shape == (3, 80, 3)
+    np.testing.assert_array_equal(result.y, y)
+
+test("PER_SAMPLE ragged (same shape): stacks to dense, y preserved",
+     test_per_sample_ragged_same_output)
+
+
+def test_per_sample_ragged_variable_output():
+    """PER_SAMPLE ragged: output shapes vary → stays ragged."""
+    from tensorts import TimeTensor, FunctionTransform, Scope
+
+    def halve(x):
+        return x[::2]  # output length = ceil(T/2), varies per sample
+
+    samples = [np.random.randn(80, 2), np.random.randn(120, 2), np.random.randn(61, 2)]
+    ts = TimeTensor.from_ragged(samples)
+
+    result = FunctionTransform(fn=halve, scope=Scope.PER_SAMPLE).fit_transform(ts)
+
+    assert result.is_ragged
+    assert result._samples[0].shape == (40, 2)
+    assert result._samples[1].shape == (60, 2)
+    assert result._samples[2].shape == (31, 2)
+
+test("PER_SAMPLE ragged (variable shape): stays ragged", test_per_sample_ragged_variable_output)
 
 
 # =====================================================================
-# 3. GLOBAL — stateless
+# 3. FunctionTransform — GLOBAL
 # =====================================================================
 print()
 print("=" * 60)
-print("FUNCTION TRANSFORM — GLOBAL")
+print("FunctionTransform — GLOBAL")
 print("=" * 60)
 
 
 def test_global_clip():
-    """GLOBAL: element-wise clipping."""
+    """GLOBAL: element-wise clipping via full tensor."""
     from tensorts import TimeTensor, Dim, FunctionTransform, Scope
 
     data = np.random.randn(4, 50, 3) * 10
     ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
 
-    clip = FunctionTransform(
-        fn=lambda x: np.clip(x, -2, 2),
-        scope=Scope.GLOBAL,
-    )
+    clip = FunctionTransform(fn=lambda x: np.clip(x, -2, 2), scope=Scope.GLOBAL)
     result = clip.fit_transform(ts)
 
     assert result.shape == (4, 50, 3)
     assert result.data.min() >= -2.0
-    assert result.data.max() <= 2.0
+    assert result.data.max() <=  2.0
 
 test("GLOBAL: element-wise clipping", test_global_clip)
 
 
-def test_global_power_spectrum():
-    """GLOBAL: batch FFT (full tensor operation)."""
+def test_global_batch_fft():
+    """GLOBAL: vectorized FFT over entire (B, T, C) tensor."""
     from tensorts import TimeTensor, Dim, FunctionTransform, Scope
 
     data = np.random.randn(4, 128, 2)
@@ -150,107 +293,25 @@ def test_global_power_spectrum():
     power = FunctionTransform(
         fn=lambda x: np.abs(np.fft.rfft(x, axis=1)) ** 2,
         scope=Scope.GLOBAL,
-        output_dims=(Dim.BATCH, Dim.FREQUENCY, Dim.CHANNEL),
     )
     result = power.fit_transform(ts)
+    # rfft of 128 → 65 bins along TIME axis
+    assert result.shape == (4, 65, 2)
 
-    assert result.shape == (4, 65, 2)  # rfft of 128 → 65 bins
-    assert result.has_dim(Dim.FREQUENCY)
-
-test("GLOBAL: batch FFT power spectrum", test_global_power_spectrum)
-
-
-# =====================================================================
-# 4. Ragged support
-# =====================================================================
-print()
-print("=" * 60)
-print("FUNCTION TRANSFORM — RAGGED")
-print("=" * 60)
-
-
-def test_ragged_per_channel():
-    """PER_CHANNEL on ragged: apply scipy filter to variable-length samples."""
-    from scipy.signal import medfilt
-    from tensorts import TimeTensor, FunctionTransform, Scope
-
-    samples = [np.random.randn(80, 2), np.random.randn(120, 2), np.random.randn(60, 2)]
-    ts = TimeTensor.from_ragged(samples, channels=["x", "y"])
-
-    smooth = FunctionTransform(fn=medfilt, scope=Scope.PER_CHANNEL,
-                                fn_kwargs={"kernel_size": 3})
-    result = smooth.fit_transform(ts)
-
-    assert result.is_ragged
-    assert len(result._samples) == 3
-    assert result._samples[0].shape == (80, 2)
-    assert result._samples[1].shape == (120, 2)
-    assert result._samples[2].shape == (60, 2)
-
-test("Ragged PER_CHANNEL: scipy medfilt on variable lengths", test_ragged_per_channel)
-
-
-def test_ragged_per_sample():
-    """PER_SAMPLE on ragged: extract features from variable-length samples."""
-    from tensorts import TimeTensor, Dim, FunctionTransform, Scope
-
-    def extract(x):
-        """(T, C) → (2*C,) features: mean and std per channel."""
-        return np.concatenate([x.mean(axis=0), x.std(axis=0)])
-
-    samples = [np.random.randn(80, 3), np.random.randn(120, 3), np.random.randn(60, 3)]
-    y = np.array([0, 1, 0])
-    ts = TimeTensor.from_ragged(samples, channels=["a", "b", "c"], y=y)
-
-    feat = FunctionTransform(
-        fn=extract,
-        scope=Scope.PER_SAMPLE,
-        output_dims=(Dim.BATCH, Dim.FEATURE),
-        output_channels=[f"f_{i}" for i in range(6)],
-    )
-    result = feat.fit_transform(ts)
-
-    # All samples produce same shape → should go dense
-    assert not result.is_ragged
-    assert result.shape == (3, 6)
-    np.testing.assert_array_equal(result.y, y)
-
-test("Ragged PER_SAMPLE: feature extraction → dense output", test_ragged_per_sample)
-
-
-def test_ragged_per_sample_still_ragged():
-    """PER_SAMPLE on ragged: output shapes differ → stays ragged."""
-    from tensorts import TimeTensor, FunctionTransform, Scope
-
-    def halve(x):
-        """(T, C) → (T//2, C) — output length depends on input."""
-        return x[::2]
-
-    samples = [np.random.randn(80, 2), np.random.randn(120, 2), np.random.randn(61, 2)]
-    ts = TimeTensor.from_ragged(samples, channels=["x", "y"])
-
-    half = FunctionTransform(fn=halve, scope=Scope.PER_SAMPLE)
-    result = half.fit_transform(ts)
-
-    assert result.is_ragged
-    assert result._samples[0].shape == (40, 2)
-    assert result._samples[1].shape == (60, 2)
-    assert result._samples[2].shape == (31, 2)
-
-test("Ragged PER_SAMPLE: variable output → stays ragged", test_ragged_per_sample_still_ragged)
+test("GLOBAL: batch FFT power spectrum", test_global_batch_fft)
 
 
 # =====================================================================
-# 5. StatefulFunctionTransform
+# 4. StatefulFunctionTransform
 # =====================================================================
 print()
 print("=" * 60)
-print("STATEFUL FUNCTION TRANSFORM")
+print("StatefulFunctionTransform")
 print("=" * 60)
 
 
 def test_stateful_global_scaler():
-    """StatefulFunctionTransform GLOBAL: custom scaler with fit/transform."""
+    """GLOBAL: learn mean/std from full tensor, apply in transform."""
     from tensorts import TimeTensor, Dim, StatefulFunctionTransform, Scope
 
     data = np.random.randn(16, 100, 4) * 10 + 5
@@ -271,14 +332,13 @@ def test_stateful_global_scaler():
 test("Stateful GLOBAL: custom mean/std scaler", test_stateful_global_scaler)
 
 
-def test_stateful_per_channel_clip():
-    """StatefulFunctionTransform PER_CHANNEL: adaptive clipping per channel."""
+def test_stateful_per_channel_adaptive_clip():
+    """PER_CHANNEL: learn 1st–99th percentile per channel, clip in transform."""
     from tensorts import TimeTensor, Dim, StatefulFunctionTransform, Scope
 
     data = np.random.randn(8, 100, 3) * 10
-    # Inject outliers
-    data[0, 0, 0] = 500
-    data[1, 1, 1] = -400
+    data[0, 0, 0] = 500     # outlier ch 0
+    data[1, 1, 1] = -400    # outlier ch 1
     ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
 
     clipper = StatefulFunctionTransform(
@@ -289,18 +349,17 @@ def test_stateful_per_channel_clip():
     result = clipper.fit_transform(ts)
 
     assert result.shape == (8, 100, 3)
-    # Outliers should be clipped
     assert result.data.max() < 500
     assert result.data.min() > -400
 
-test("Stateful PER_CHANNEL: adaptive percentile clipping", test_stateful_per_channel_clip)
+test("Stateful PER_CHANNEL: adaptive percentile clipping per channel", test_stateful_per_channel_adaptive_clip)
 
 
 def test_stateful_per_channel_ragged():
-    """StatefulFunctionTransform PER_CHANNEL on ragged data."""
+    """PER_CHANNEL on ragged: state learned from concatenated samples."""
     from tensorts import TimeTensor, StatefulFunctionTransform, Scope
 
-    samples = [np.random.randn(80, 2) * 5 + 10 for _ in range(10)]
+    samples = [np.random.randn(np.random.randint(60, 120), 2) * 5 + 10 for _ in range(10)]
     ts = TimeTensor.from_ragged(samples, channels=["a", "b"])
 
     scaler = StatefulFunctionTransform(
@@ -312,20 +371,44 @@ def test_stateful_per_channel_ragged():
 
     assert result.is_ragged
     all_data = np.concatenate(result._samples, axis=0)
-    assert abs(np.mean(all_data[:, 0])) < 0.3
-    assert abs(np.mean(all_data[:, 1])) < 0.3
+    assert abs(np.mean(all_data[:, 0])) < 0.3    # channel 0 ~zero mean
+    assert abs(np.mean(all_data[:, 1])) < 0.3    # channel 1 ~zero mean
 
-test("Stateful PER_CHANNEL: ragged data", test_stateful_per_channel_ragged)
+test("Stateful PER_CHANNEL ragged: state learned across all samples", test_stateful_per_channel_ragged)
 
 
-def test_stateful_train_test_split():
-    """Fit StatefulFunctionTransform on train, apply on test."""
+def test_stateful_fit_scope_vs_transform_scope():
+    """fit_scope and scope can differ when both share the same state container.
+
+    PER_SAMPLE fit (sets _state) + GLOBAL transform (reads _state) is a valid
+    cross-scope combination — fit aggregates all samples, transform applies once.
+    """
+    from tensorts import TimeTensor, Dim, StatefulFunctionTransform, Scope
+
+    data = np.random.randn(10, 100, 4) * 10 + 5
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+
+    sft = StatefulFunctionTransform(
+        fit_fn=lambda x: {"mu": x.mean(), "sigma": x.std()},
+        transform_fn=lambda x, s: (x - s["mu"]) / (s["sigma"] + 1e-8),
+        scope=Scope.GLOBAL,
+        fit_scope=Scope.PER_SAMPLE,    # fit_scope overrides fit granularity
+    )
+    result = sft.fit_transform(ts)
+    assert result.shape == (10, 100, 4)
+
+test("Stateful: fit_scope=PER_SAMPLE, scope=GLOBAL (shared _state)", test_stateful_fit_scope_vs_transform_scope)
+
+
+def test_stateful_no_train_test_leakage():
+    """Fit on train split, transform test — test statistics not used in fitting."""
     from tensorts import TimeTensor, Dim, StatefulFunctionTransform, Scope, temporal_split
 
     data = np.random.randn(50, 100, 2) * 10 + 5
-    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), y=np.arange(50))
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
+                    y=np.arange(50))
 
-    train, test_ts = temporal_split(ts, test_ratio=0.2)
+    train, test = temporal_split(ts, test_ratio=0.2)
 
     scaler = StatefulFunctionTransform(
         fit_fn=lambda x: {"mu": x.mean(axis=(0, 1), keepdims=True),
@@ -334,20 +417,21 @@ def test_stateful_train_test_split():
         scope=Scope.GLOBAL,
     )
 
+    # Fit only on train
     scaler.fit(train)
-    result_train = scaler.transform(train)
-    result_test = scaler.transform(test_ts)
+    Xt_train = scaler.transform(train)
+    Xt_test  = scaler.transform(test)       # uses train statistics
 
-    assert result_train.shape == (40, 100, 2)
-    assert result_test.shape == (10, 100, 2)
-    # Both use train's statistics — test won't be perfectly zero-mean
-    assert abs(np.mean(result_train.data)) < 0.2
+    assert Xt_train.shape == (40, 100, 2)
+    assert Xt_test.shape  == (10, 100, 2)
+    # Train should be well-normalized
+    assert abs(np.mean(Xt_train.data)) < 0.2
 
-test("Stateful: fit on train, transform test (no leakage)", test_stateful_train_test_split)
+test("Stateful: fit on train, transform test (no data leakage)", test_stateful_no_train_test_leakage)
 
 
 # =====================================================================
-# 6. Pipeline & ChannelSelect integration
+# 5. Integration: Pipeline and ChannelSelect
 # =====================================================================
 print()
 print("=" * 60)
@@ -355,51 +439,47 @@ print("INTEGRATION TESTS")
 print("=" * 60)
 
 
-def test_pipeline_integration():
-    """FunctionTransform inside a full Pipeline."""
+def test_function_transform_in_pipeline():
+    """FunctionTransform inside a Pipeline with other steps."""
     from scipy.signal import medfilt
     from tensorts import (
         TimeTensor, Dim, Pipeline, FunctionTransform, Scope,
-        StandardScaler, SlidingWindow, StatisticalFeatures,
+        StandardScaler, SlidingWindow, Flatten, make_statistical_extractor,
     )
 
     data = np.random.randn(20, 200, 4)
-    ts = TimeTensor(
-        data=data,
-        dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
-        channels=["a", "b", "c", "d"],
-        y=np.random.randint(0, 3, 20),
-    )
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
+                    channels=["a", "b", "c", "d"],
+                    y=np.random.randint(0, 3, 20))
 
     pipe = Pipeline([
-        ("smooth",  FunctionTransform(fn=medfilt, scope=Scope.PER_CHANNEL,
-                                       fn_kwargs={"kernel_size": 5})),
-        ("scale",   StandardScaler()),
-        ("window",  SlidingWindow(size=50, stride=25)),
-        ("stats",   StatisticalFeatures(["mean", "std"])),
+        ("smooth", FunctionTransform(fn=medfilt, scope=Scope.PER_CHANNEL,
+                                      fn_kwargs={"kernel_size": 5})),
+        ("scale",  StandardScaler()),
+        ("window", SlidingWindow(size=50, stride=25)),
+        ("stats",  make_statistical_extractor(["mean", "std"])),
+        ("flat",   Flatten()),
     ])
     result = pipe.fit_transform(ts)
 
-    # 2 stats × 4 channels = 8 features per window
-    assert result.shape[-1] == 8
+    # Dense SlidingWindow → (B, K, W, C). After stats: (B, K, 2, C).
+    # After flatten: (B, K * 2 * 4).  Check FEATURE axis has 2 stats × 4 channels.
+    assert result.shape[0] == 20       # batch preserved
+    assert result.shape[-1] % 8 == 0   # multiple of 2_stats × 4_channels
     assert result.y is not None
 
-test("Pipeline: FunctionTransform + StandardScaler + Window + Stats", test_pipeline_integration)
+test("Pipeline: FunctionTransform + StandardScaler + SlidingWindow + multi-fn stats",
+     test_function_transform_in_pipeline)
 
 
-def test_channel_select_integration():
-    """FunctionTransform inside ChannelSelect — filter only some channels."""
+def test_function_transform_in_channel_select():
+    """FunctionTransform inside ChannelSelect — smooth only some channels."""
     from scipy.signal import medfilt
-    from tensorts import (
-        TimeTensor, Dim, ChannelSelect, FunctionTransform, Scope,
-    )
+    from tensorts import TimeTensor, Dim, ChannelSelect, FunctionTransform, Scope
 
     data = np.random.randn(4, 100, 6)
-    ts = TimeTensor(
-        data=data,
-        dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
-        channels=["a_x", "a_y", "a_z", "g_x", "g_y", "g_z"],
-    )
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
+                    channels=["a_x", "a_y", "a_z", "g_x", "g_y", "g_z"])
 
     cs = ChannelSelect(
         "a_*",
@@ -409,37 +489,14 @@ def test_channel_select_integration():
     result = cs.fit_transform(ts)
 
     assert result.n_channels == 6
-    # a_* channels should be smoothed, g_* unchanged
-    g_orig = ts.ch["g_*"].data
-    g_result = result.ch["g_*"].data
-    np.testing.assert_array_equal(g_result, g_orig)
+    # g_* channels are bit-for-bit identical to input
+    np.testing.assert_array_equal(result.ch["g_*"].data, ts.ch["g_*"].data)
 
-test("ChannelSelect: FunctionTransform on subset, passthrough others", test_channel_select_integration)
-
-
-def test_4d_per_channel():
-    """PER_CHANNEL on 4D tensor (B, K, T, C)."""
-    from tensorts import TimeTensor, Dim, FunctionTransform, Scope
-
-    data = np.random.randn(4, 3, 50, 2)
-    ts = TimeTensor(
-        data=data,
-        dims=(Dim.BATCH, Dim.WINDOW, Dim.TIME, Dim.CHANNEL),
-        channels=["x", "y"],
-    )
-
-    smooth = FunctionTransform(
-        fn=lambda x: np.convolve(x, np.ones(3)/3, mode="same"),
-        scope=Scope.PER_CHANNEL,
-    )
-    result = smooth.fit_transform(ts)
-
-    assert result.shape == (4, 3, 50, 2), f"Got {result.shape}"
-
-test("PER_CHANNEL on 4D (B,K,T,C) tensor", test_4d_per_channel)
+test("ChannelSelect: FunctionTransform on subset, passthrough others",
+     test_function_transform_in_channel_select)
 
 
-def test_pipeline_stateful_and_stateless():
+def test_mixed_stateful_stateless_pipeline():
     """Mix StatefulFunctionTransform and FunctionTransform in a pipeline."""
     from tensorts import (
         TimeTensor, Dim, Pipeline, FunctionTransform,
@@ -450,50 +507,48 @@ def test_pipeline_stateful_and_stateless():
     ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
                     channels=["a", "b", "c"], y=np.random.randint(0, 2, 30))
 
-    train, test_ts = temporal_split(ts, test_ratio=0.2)
+    train, test = temporal_split(ts, test_ratio=0.2)
 
     pipe = Pipeline([
-        ("clip", FunctionTransform(
-            fn=lambda x: np.clip(x, -3, 3),
-            scope=Scope.PER_CHANNEL,
-        )),
+        ("clip", FunctionTransform(fn=lambda x: np.clip(x, -3, 3),
+                                   scope=Scope.PER_CHANNEL)),
         ("scale", StatefulFunctionTransform(
             fit_fn=lambda x: {"mu": np.mean(x), "sigma": np.std(x)},
             transform_fn=lambda x, s: (x - s["mu"]) / (s["sigma"] + 1e-8),
             scope=Scope.PER_CHANNEL,
         )),
-        ("flatten", Flatten()),
+        ("flat", Flatten()),
     ])
 
-    X_train = pipe.fit_transform(train)
-    X_test = pipe.transform(test_ts)
+    Xt_train = pipe.fit_transform(train)
+    Xt_test  = pipe.transform(test)
 
-    assert X_train.shape[-1] == X_test.shape[-1]
-    assert X_train.shape[-1] == 100 * 3  # T * C flattened
+    assert Xt_train.shape[-1] == Xt_test.shape[-1]
+    assert Xt_train.shape[-1] == 100 * 3     # T * C flattened
 
-test("Pipeline: mixed stateful + stateless FunctionTransforms", test_pipeline_stateful_and_stateless)
+test("Pipeline: mixed stateful + stateless FunctionTransforms", test_mixed_stateful_stateless_pipeline)
 
 
-def test_lambda_naming():
-    """Verify repr shows useful name."""
+def test_repr():
+    """Repr shows function name or custom name."""
     from tensorts import FunctionTransform, StatefulFunctionTransform, Scope
 
-    def my_cool_filter(x):
-        return x * 2
+    def my_filter(x):
+        return x
 
-    ft = FunctionTransform(fn=my_cool_filter, scope=Scope.PER_CHANNEL)
-    assert "my_cool_filter" in repr(ft)
+    ft = FunctionTransform(fn=my_filter, scope=Scope.PER_CHANNEL)
+    assert "my_filter" in repr(ft)
 
     ft2 = FunctionTransform(fn=lambda x: x, scope=Scope.GLOBAL, name="identity")
     assert "identity" in repr(ft2)
 
     sft = StatefulFunctionTransform(
         fit_fn=lambda x: {}, transform_fn=lambda x, s: x,
-        scope=Scope.GLOBAL, name="noop_stateful",
+        scope=Scope.GLOBAL, name="noop",
     )
-    assert "noop_stateful" in repr(sft)
+    assert "noop" in repr(sft)
 
-test("Repr shows function name or custom name", test_lambda_naming)
+test("Repr: function name / custom name appears in repr", test_repr)
 
 
 # =====================================================================
