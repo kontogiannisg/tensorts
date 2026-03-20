@@ -2,82 +2,38 @@
 
 **A channel-aware, shape-flexible tensor pipeline for multivariate time series.**
 
-tensorts gives you a single data container — `TimeTensor` — where every axis has a semantic role (batch, time, channel, window, frequency, feature) and the channel axis carries named metadata. Transforms reason about *which* axis to operate on by name, never by integer index. The result is composable pipelines that work across domains: sensor data, audio, financial time series, and anything shaped like `(B, T, C)`.
+tensorts gives you a single container — `TimeTensor` — where every axis carries a semantic role (batch, time, channel, window, frequency, feature) and the channel axis carries named metadata. Transforms reason about *which axis to operate on by name*, never by integer index. The result is composable, domain-agnostic pipelines that work identically on `(B, T, C)` sensor data, `(B, FREQ, T', C)` spectrograms, and ragged lists of variable-length recordings.
 
 ---
 
-## Key features
+## Why tensorts?
 
-- **Semantic dimensions**: axes are `Dim.BATCH`, `Dim.TIME`, `Dim.CHANNEL`, etc. — transforms resolve them automatically regardless of tensor rank
-- **Named channel indexing**: select channels by name, glob, regex, or predefined groups (`ts.ch['accel_*']`)
-- **Per-channel routing**: apply different transforms to different channel subsets via `ChannelTransform` and `ChannelSelect`
-- **Ragged support**: variable-length sequences are first-class citizens — windowing converts ragged → dense inside the pipeline
-- **Label propagation**: `y` labels travel with the tensor through every transform, including shape-changing ones like windowing
-- **sklearn-compatible**: every transform follows `fit` / `transform` / `fit_transform` — stateful transforms learn on train, apply on test
-- **Batteries included**: scalers, filters, STFT, mel spectrograms, statistical features, framed audio features, PCA, and more
-- **Pure NumPy**: zero deep-learning dependencies, minimal footprint (only `numpy` + optional `scipy`)
+In practice, multivariate time series pipelines accumulate silent bugs:
+
+- A scaler that was meant to work per-channel accidentally flattens all axes
+- A spectrogram step inserts a new axis, shifting every integer index below it
+- Variable-length recordings need padding before windowing, but the padding runs before scaling — leaking future statistics
+- Labels go out of sync when windowing doubles the sample count
+
+tensorts solves these by making the axis system explicit and carrying labels, channel names, and metadata through every transform automatically.
 
 ---
 
 ## Installation
 
 ```bash
-# Clone or copy the tensorts/ directory into your project
+# Add tensorts/ to your project (no package manager needed yet)
 pip install numpy scipy
+# Optional: pip install pandas  (for from_csv / to_dataframe)
 ```
 
 Run the test suite to verify:
 
 ```bash
-python test_tensorts.py
-# Expected: 32/32 passed, 0/32 failed — ALL TESTS PASSED
-```
-
----
-
-## Quick start
-
-```python
-import numpy as np
-from tensorts import (
-    TimeTensor, Dim, Pipeline,
-    StandardScaler, SlidingWindow, StatisticalFeatures, Flatten,
-    temporal_split,
-)
-
-# Create a TimeTensor
-data = np.random.randn(100, 500, 6)  # 100 samples, 500 timesteps, 6 channels
-labels = np.random.randint(0, 3, size=100)
-
-ts = TimeTensor(
-    data=data,
-    dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
-    channels=['acc_x', 'acc_y', 'acc_z', 'gyr_x', 'gyr_y', 'gyr_z'],
-    channel_groups={'acc': 'acc_*', 'gyr': 'gyr_*'},
-    y=labels,
-    metadata={'sampling_rate': 50},
-)
-
-# Split (preserves temporal order)
-train, test = temporal_split(ts, test_ratio=0.2)
-
-# Build pipeline
-pipe = Pipeline([
-    ('scale',   StandardScaler()),
-    ('window',  SlidingWindow(size=128, stride=64)),
-    ('stats',   StatisticalFeatures(['mean', 'std', 'rms', 'skew'])),
-    ('flatten', Flatten()),
-])
-
-# Fit on train, transform both
-X_train = pipe.fit_transform(train)
-X_test  = pipe.transform(test)
-
-# Feed to any sklearn model
-from sklearn.ensemble import RandomForestClassifier
-clf = RandomForestClassifier()
-clf.fit(X_train.numpy(), X_train.y)
-clf.predict(X_test.numpy())
+python test_tensorts.py         # 48 tests
+python test_feature_extractor.py   # 28 tests
+python test_function_transform.py  # 21 tests
+python test_sklearn_compat_problems.py  # 4 real-world problems
 ```
 
 ---
@@ -86,234 +42,560 @@ clf.predict(X_test.numpy())
 
 ```
 tensorts/
+├── __init__.py          — Public API (everything importable from top level)
 │
-├── __init__.py                     # Public API — everything importable from top level
+├── core/                — Foundation layer
+│   ├── dims.py          — Dim enum + DimSchema
+│   ├── channels.py      — ChannelIndex: named channel access, groups, globs
+│   └── tensor.py        — TimeTensor: the central data container
 │
-├── core/                           # Foundation layer
-│   ├── dims.py                     # Dim enum + DimSchema
-│   ├── channels.py                 # ChannelIndex — named channel access
-│   └── tensor.py                   # TimeTensor — the central data container
+├── transforms/          — All transforms (sklearn fit/transform protocol)
+│   ├── base.py          — Transform ABC, Pipeline, ChannelTransform, ChannelSelect, Scope
+│   ├── preprocessing.py — StandardScaler, MinMaxScaler, RobustScaler, Interpolate, LabelEncoder
+│   ├── temporal.py      — SlidingWindow, Pad, Truncate, Resample
+│   ├── spectral.py      — PreEmphasis, ButterworthFilter, BandpassFilter, STFT,
+│   │                       MelSpectrogram, LogTransform
+│   ├── functional.py    — FunctionTransform, StatefulFunctionTransform, FeatureExtractor
+│   ├── features.py      — make_statistical_extractor + built-in stat function map
+│   └── shape.py         — Flatten, Reshape, Transpose, PCA, Squeeze, Unsqueeze
 │
-├── transforms/                     # All transforms (sklearn fit/transform protocol)
-│   ├── base.py                     # Transform, Pipeline, ChannelTransform,
-│   │                               # ChannelSelect, FrameFeature, FrameFeatureBank
-│   ├── preprocessing.py            # StandardScaler, MinMaxScaler, RobustScaler,
-│   │                               # Interpolate, LabelEncoder
-│   ├── temporal.py                 # SlidingWindow, Pad, Truncate, Resample
-│   ├── spectral.py                 # PreEmphasis, ButterworthFilter, BandpassFilter,
-│   │                               # STFT, MelSpectrogram, LogTransform
-│   ├── features.py                 # StatisticalFeatures, RollingFeatures,
-│   │                               # ZCR, RMS, SpectralEntropy, SpectralCentroid,
-│   │                               # SpectralRolloff, SpectralFlatness, MFCC
-│   └── shape.py                    # Flatten, Reshape, Transpose, PCA,
-│                                   # Squeeze, Unsqueeze
+├── compat.py            — SklearnWrapper: cross_val_score / GridSearchCV bridge
 │
-├── io/                             # Data loading and export
-│   ├── loaders.py                  # from_csv, from_numpy, from_dataframe
-│   └── exporters.py                # to_numpy, to_sklearn, to_dataframe
+├── io/                  — Data loading and export
+│   ├── loaders.py       — from_numpy, from_csv, from_dataframe
+│   └── exporters.py     — to_numpy, to_sklearn, to_dataframe
 │
-└── utils/                          # Utilities
-    └── split.py                    # temporal_split, stratified_temporal_split,
-                                    # kfold_temporal
+└── utils/               — Utilities
+    └── split.py         — temporal_split, stratified_temporal_split, kfold_temporal
 ```
 
 ---
 
-## Architecture
+## Core concepts
 
-### Core layer
-
-#### `Dim` — semantic axis roles
-
-Every axis in a `TimeTensor` has a semantic role. Transforms use these roles to find the right axis automatically.
-
-| Dim | Meaning | Typical position |
-|-----|---------|-----------------|
-| `BATCH` | Samples / instances | 0 |
-| `TIME` | Temporal axis (raw timesteps or within-window time) | 1 |
-| `CHANNEL` | Sensor channels, features, or signal components | last |
-| `WINDOW` / `FRAME` | Window index from `SlidingWindow` (aliases for the same dim) | inserted before TIME |
-| `FREQUENCY` | Frequency bins from FFT / STFT / Mel | replaces TIME |
-| `FEATURE` | Extracted feature vector | replaces TIME+CHANNEL after feature extraction |
-
-Custom dims can be registered at runtime:
+### Dim — semantic axis roles
 
 ```python
-Dim.register("SCALE")  # returns a new Dim member
+from tensorts import Dim
+
+Dim.BATCH      # samples / instances
+Dim.TIME       # raw timesteps or within-window time
+Dim.CHANNEL    # sensor channels, signal components
+Dim.WINDOW     # window index from SlidingWindow (alias: Dim.FRAME)
+Dim.FREQUENCY  # frequency bins from FFT / STFT / Mel
+Dim.FEATURE    # extracted feature vector
 ```
 
-#### `DimSchema` — axis validation
-
-Wraps a tuple of `Dim` values and enforces that each role appears at most once. Provides axis resolution (`schema.axis(Dim.TIME) → int`), replacement, insertion, and removal.
-
-#### `ChannelIndex` — named channel access
-
-Tracks channel names, supports glob matching (`'accel_*'`), regex, named groups, and slicing. When a `TimeTensor` is channel-sliced, the `ChannelIndex` is sliced in sync.
+Custom dims can be registered and are idempotent:
 
 ```python
-ts.ch['accel_x', 'accel_y']   # select by name
-ts.ch['accel_*']               # select by glob
-ts.ch.group('accel')           # select by predefined group
+scale_dim = Dim.register("SCALE")  # returns new Dim member
+Dim.register("SCALE") is scale_dim  # True — safe to call repeatedly
 ```
 
-#### `TimeTensor` — the central container
+### TimeTensor — the data container
 
-A NumPy array with semantic dims, named channels, optional labels, and metadata. Operates in two modes:
+A NumPy array where every axis has a semantic role. Operates in two modes:
 
-| Mode | Storage | When to use |
-|------|---------|------------|
-| **Dense** | Single `ndarray` of shape `(B, T, C)` or higher rank | All samples same length |
-| **Ragged** | List of `ndarray` with shapes `(T_i, C)` | Variable-length sequences |
-
-Key methods:
-
-| Method | Purpose |
-|--------|---------|
-| `ts.axis(Dim.TIME)` | Resolve semantic dim → integer index |
-| `ts.ch[...]` | Channel selection (returns new TimeTensor) |
-| `ts.with_data(new_arr, ...)` | New TimeTensor with updated array, preserving metadata |
-| `ts.with_ragged(samples, ...)` | New ragged TimeTensor with updated samples |
-| `ts.to_dense(pad_value=0)` | Convert ragged → dense by padding |
-| `ts.numpy()` | Extract raw ndarray |
-| `ts[0]`, `ts[:10]` | Batch slicing (preserves labels) |
-
-### Transform layer
-
-Every transform follows the sklearn protocol:
+| Mode | Storage | When |
+|------|---------|------|
+| **Dense** | Single `ndarray (B, T, C)` or higher rank | All samples same length |
+| **Ragged** | List of `ndarray (T_i, C)` | Variable-length sequences |
 
 ```python
-class Transform:
-    def fit(self, X: TimeTensor, y=None) -> Transform: ...
-    def transform(self, X: TimeTensor) -> TimeTensor: ...
-    def fit_transform(self, X: TimeTensor, y=None) -> TimeTensor: ...
+from tensorts import TimeTensor, Dim
+
+# Dense — all samples 500 timesteps
+ts = TimeTensor(
+    data=np.random.randn(100, 500, 6),
+    dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
+    channels=['acc_x', 'acc_y', 'acc_z', 'gyro_x', 'gyro_y', 'gyro_z'],
+    channel_groups={'acc': 'acc_*', 'gyro': 'gyro_*'},
+    y=labels,
+    metadata={'sampling_rate': 50},
+)
+
+# Ragged — variable-length recordings
+ts = TimeTensor.from_ragged(
+    samples,                           # list of (T_i, C) arrays
+    channels=['acc_x', 'acc_y', 'acc_z'],
+    y=labels,
+)
+
+ts.shape           # (100, 500, 6) or (N, -1, C) for ragged
+ts.axis(Dim.TIME)  # integer axis index, resolved by name
+ts.n_samples       # 100
+ts.n_channels      # 6
+ts.y               # labels array or None
+ts.metadata        # dict
+ts.is_ragged       # bool
+
+ts[0]              # single sample, preserves labels
+ts[10:20]          # slice, preserves labels
+ts[[0, 5, 9]]      # fancy index, preserves labels
+
+ts.to_dense(pad_value=0.0)   # ragged → padded dense
+ts.numpy()                   # raw ndarray (dense only)
 ```
+
+### ChannelIndex — named channel access
+
+```python
+# Select by name, glob, or group
+ts.ch['acc_x']         # single channel
+ts.ch['acc_*']         # glob — returns acc_x, acc_y, acc_z
+ts.ch.group('acc')     # predefined group
+
+# Groups can be defined at creation or added later
+ts.channels.add_group('accel_xy', ['acc_x', 'acc_y'])
+```
+
+### Y labels — two usage patterns
+
+This is the most important design decision when using tensorts:
+
+**Pattern 1: native tensorts** — embed `y` in the tensor, pass only `X`
+
+```python
+# y travels with X through every transform
+X = TimeTensor.from_ragged(samples, y=labels)
+
+pipe = Pipeline([...])
+Xt = pipe.fit_transform(X)   # no y= argument needed
+Xt.y                          # labels, updated by windowing if applicable
+
+train, test = temporal_split(X, test_ratio=0.2)
+pipe.fit(train)
+Xt_test = pipe.transform(test)
+Xt_test.y   # labels for the test set
+```
+
+**Pattern 2: sklearn compat** — pass `X` and `y` separately
+
+```python
+# Required for cross_val_score, GridSearchCV, etc.
+# sklearn must slice y as a plain array independently of X.
+scores = cross_val_score(wrapper, X, y=X.y, cv=5)
+gs = GridSearchCV(wrapper, param_grid)
+gs.fit(X, y=X.y)
+```
+
+The key difference: when `SlidingWindow` is in the pipeline, it expands B samples into B×K windows and propagates labels into `Xt.y`. In the sklearn path, `SklearnWrapper` uses `Xt.y` internally so the expanded label count matches the expanded sample count.
+
+---
+
+## Transforms
+
+All transforms follow the sklearn fit/transform protocol and operate on `TimeTensor`. See [`tensorts/transforms/README.md`](tensorts/transforms/README.md) for the full reference.
+
+### Scope — what each function sees
 
 Transforms declare their operational scope:
 
-| Scope | Meaning | Example |
-|-------|---------|---------|
-| `GLOBAL` | Needs all axes together | PCA, Flatten |
-| `PER_CHANNEL` | Independent per channel, vectorized over batch+time | StandardScaler, ButterworthFilter |
-| `PER_SAMPLE` | Independent per sample, vectorized over channels | SlidingWindow |
-| `ELEMENTWISE` | Independent per element | LogTransform, PreEmphasis |
+| Scope | fn receives | Example use |
+|-------|------------|-------------|
+| `PER_CHANNEL` | 1-D vector `(T,)` per channel | scalers, filters |
+| `PER_SAMPLE` | 2-D matrix `(T, C)` per sample | per-sample normalization |
+| `GLOBAL` | full tensor | clipping, FFT over entire batch |
 
-All scopes use vectorized NumPy — no Python loops over individual samples or channels.
+### Preprocessing
 
-### Shape transformation model
+```python
+from tensorts import StandardScaler, MinMaxScaler, RobustScaler, Interpolate, LabelEncoder
 
-Transforms can change the tensor's dimensionality. The dim system tracks what happened at each step:
+StandardScaler()                          # zero-mean, unit-std per channel
+MinMaxScaler(feature_range=(0, 1))        # scale to [0, 1] per channel
+RobustScaler(quantile_range=(25, 75))     # median + IQR (outlier-robust)
+Interpolate(method='linear')              # fill NaN values
+LabelEncoder()                            # encode string y labels to integers
+```
 
-| Transform | Input dims | Output dims |
-|-----------|-----------|-------------|
-| `StandardScaler` | `(B, T, C)` | `(B, T, C)` — same |
-| `SlidingWindow` | `(B, T, C)` | `(B, K, T, C)` — adds WINDOW |
-| `SlidingWindow` (ragged) | `list of (T_i, C)` | `(B_total, T, C)` — ragged→dense |
-| `StatisticalFeatures` | `(B, K, T, C)` | `(B, K, F)` — TIME+CHANNEL→FEATURE |
-| `Flatten` | `(B, K, F)` | `(B, M)` — all→FEATURE |
-| `STFT` | `(B, T, C)` | `(B, F, T', C)` — TIME→FREQUENCY+TIME |
-| `MelSpectrogram` | `(B, T, C)` | `(B, mel, T', C)` — mel-scaled |
-| `FrameFeatureBank` | `(B, K, T, C)` | `(B, K, F)` — TIME+CHANNEL→FEATURE |
-| `PCA` | any | `(B, F)` — reduces to components |
+All preprocessing transforms support ragged input and preserve it.
+
+### Temporal
+
+```python
+from tensorts import SlidingWindow, Pad, Truncate, Resample
+
+# Dense: (B, T, C) → (B, K, W, C)  where K = num windows
+# Ragged: list(T_i, C) → dense (B_total, W, C)  all windows flat
+SlidingWindow(size=128, stride=64, label_strategy='repeat')
+
+# Ragged → dense (pads to target_length)
+Pad(target_length=256, mode='constant', value=0.0)
+
+Truncate(target_length=200)   # trim time axis
+Resample(target_length=64)    # linear interpolation to fixed length
+```
+
+`label_strategy` controls how labels expand with windows:
+- `'repeat'` — all windows from sample i get label `y[i]`
+- `'last'` — only the last window keeps the label
+
+### Spectral
+
+```python
+from tensorts import PreEmphasis, ButterworthFilter, BandpassFilter, STFT, MelSpectrogram, LogTransform
+
+PreEmphasis(coeff=0.97)                                   # high-freq boost; (B,T,C)→(B,T,C)
+ButterworthFilter(cutoff=50, btype='lowpass', order=4)    # IIR filter; shape unchanged
+BandpassFilter(low=1, high=20, sampling_rate=256)         # convenience bandpass
+STFT(n_fft=512, hop_length=160)                           # (B,T,C)→(B,FREQ,T',C)
+MelSpectrogram(n_fft=512, n_mels=64, sampling_rate=16000) # (B,T,C)→(B,mel,T',C)
+LogTransform(eps=1e-10)                                   # log(x + eps), shape unchanged
+```
+
+### Shape
+
+```python
+from tensorts import Flatten, Reshape, Transpose, PCA, Squeeze, Unsqueeze
+
+Flatten()                                         # (B,...) → (B, M)
+Transpose(order=(Dim.BATCH, Dim.CHANNEL, Dim.TIME))
+Squeeze(dim=Dim.WINDOW)                           # remove size-1 axis
+Unsqueeze(dim=Dim.WINDOW, position=1)             # add size-1 axis
+PCA(n_components=0.95)                            # keep 95% variance
+PCA(n_components=32)                              # exact component count
+```
+
+### FunctionTransform — wrap any signal-processing function
+
+`FunctionTransform` wraps a stateless function as a pipeline step. The dim schema is **preserved** — this is the right tool for preprocessing that changes values but not the semantic structure of the tensor.
+
+```python
+from tensorts import FunctionTransform, Scope
+from scipy.signal import medfilt
+
+# PER_CHANNEL: fn(T,) → (T',)  — applied independently to each channel
+smooth = FunctionTransform(fn=medfilt, scope=Scope.PER_CHANNEL,
+                            fn_kwargs={'kernel_size': 5})
+
+# PER_SAMPLE: fn(T, C) → (T', C)  — applied independently to each sample
+def zscore(x):
+    return (x - x.mean(axis=0)) / (x.std(axis=0) + 1e-8)
+
+normalize = FunctionTransform(fn=zscore, scope=Scope.PER_SAMPLE)
+
+# GLOBAL: fn receives the full tensor
+clip = FunctionTransform(fn=lambda x: np.clip(x, -3, 3), scope=Scope.GLOBAL)
+```
+
+**Important**: `FunctionTransform` preserves the number of dimensions (ndim). Use `FeatureExtractor` when a function changes the number of axes (e.g., `(T,) → (FREQ, T')` or `(T,) → scalar`).
+
+### StatefulFunctionTransform — fit a state, then apply it
+
+Like `FunctionTransform` but separates fit (learn statistics) from transform (apply them). The correct tool when you need to fit on training data and apply the learned state to test data.
+
+```python
+from tensorts import StatefulFunctionTransform, Scope
+
+# PER_CHANNEL: learn a separate state per channel
+adaptive_clip = StatefulFunctionTransform(
+    fit_fn=lambda x: {'lo': np.percentile(x, 1), 'hi': np.percentile(x, 99)},
+    transform_fn=lambda x, s: np.clip(x, s['lo'], s['hi']),
+    scope=Scope.PER_CHANNEL,
+)
+
+# GLOBAL: one state for the whole tensor
+scaler = StatefulFunctionTransform(
+    fit_fn=lambda x: {'mu': x.mean(axis=(0,1), keepdims=True),
+                      'sigma': x.std(axis=(0,1), keepdims=True)},
+    transform_fn=lambda x, s: (x - s['mu']) / (s['sigma'] + 1e-8),
+    scope=Scope.GLOBAL,
+)
+scaler.fit(train)
+Xt_train = scaler.transform(train)
+Xt_test  = scaler.transform(test)  # uses train statistics — no leakage
+```
+
+### FeatureExtractor — change dimensionality per channel
+
+`FeatureExtractor` is for functions that **change the number of axes** for each channel. It operates in two modes:
+
+#### Single-fn mode — one function, arbitrary output shape
+
+```python
+from tensorts import FeatureExtractor, Dim
+
+# Spectrogram: (T,) → (FREQ, T')   TIME is replaced by FREQUENCY + TIME
+fe = FeatureExtractor(
+    fn=compute_mel,
+    input_dim=Dim.TIME,
+    output_dims=(Dim.FREQUENCY, Dim.TIME),
+    fn_kwargs={'n_mels': 64},
+)
+# (B, T, C) → (B, FREQ, T', C)
+# (B, W, T, C) → (B, W, FREQ, T', C)  — windowed input works automatically
+
+# Scalar: (T,) → scalar   TIME axis removed
+energy = FeatureExtractor(
+    fn=lambda x: np.sum(x**2),
+    input_dim=Dim.TIME,
+    output_dims=(),     # empty tuple = scalar
+)
+# (B, T, C) → (B, C)
+```
+
+#### Multi-fn mode — multiple functions stacked along a FEATURE axis
+
+This replaces the old `StatisticalFeatures` and `FrameFeatureBank`. Each function receives a 1-D vector and must return a scalar or 1-D array. Results are concatenated along a new `Dim.FEATURE` axis.
+
+```python
+# Statistical summary
+fe = FeatureExtractor(
+    functions=[
+        ('mean',   np.mean),
+        ('std',    np.std),
+        ('energy', lambda x: float(np.sum(x**2))),
+    ],
+    input_dim=Dim.TIME,
+)
+# (B, T, C) → (B, 3, C)       feature_names_out_: ['mean', 'std', 'energy']
+# (B, W, T, C) → (B, W, 3, C) — windowed input works automatically
+
+# Mix scalar + vector outputs (K_total = sum of all output sizes)
+fe = FeatureExtractor(
+    functions=[
+        ('zcr',    lambda x: float(np.mean(np.diff(np.signbit(x))))),  # scalar
+        ('top5',   lambda x: np.sort(np.abs(np.fft.rfft(x)))[-5:]),    # 5-element
+    ],
+    input_dim=Dim.TIME,
+)
+# (B, T, C) → (B, 6, C)       feature_names_out_: ['zcr', 'top5__0', ..., 'top5__4']
+
+# Per-function kwargs via 3-tuples
+fe = FeatureExtractor(
+    functions=[
+        ('mean', np.mean),
+        ('topk', compute_topk, {'k': 10}),   # (name, fn, kwargs_dict)
+    ],
+    input_dim=Dim.TIME,
+)
+```
+
+### make_statistical_extractor — convenience factory
+
+Pre-loads `FeatureExtractor` with common statistical functions. Accepts a mix of built-in names and custom callables:
+
+```python
+from tensorts import make_statistical_extractor
+
+# Built-in names only (13 available)
+fe = make_statistical_extractor(['mean', 'std', 'rms', 'skew', 'kurtosis', 'zcr'])
+
+# Mix built-in + custom callable
+def fft_rms(x):
+    return float(np.sqrt(np.mean(np.abs(np.fft.rfft(x))**2)))
+
+fe = make_statistical_extractor([
+    'mean', 'std',
+    ('fft_rms', fft_rms),                         # (name, callable)
+    ('topk',    top_k_energy, {'k': 5}),           # (name, callable, kwargs)
+])
+```
+
+Built-in names: `mean`, `std`, `var`, `min`, `max`, `median`, `rms`, `range`, `energy`, `skew`, `kurtosis`, `iqr`, `zcr`
 
 ---
 
-## Pipeline examples
-
-### 1. Air quality → regression
+## Pipeline composition
 
 ```python
+from tensorts import Pipeline, ChannelTransform, ChannelSelect
+
+# Sequential pipeline
 pipe = Pipeline([
-    ('impute',  Interpolate(method='linear')),
-    ('scale',   StandardScaler()),
-    ('window',  SlidingWindow(size=24, stride=1)),     # 24-hour windows
-    ('stats',   StatisticalFeatures(['mean', 'std', 'min', 'max'])),
+    ('scale',  StandardScaler()),
+    ('window', SlidingWindow(size=128, stride=64)),
+    ('fe',     make_statistical_extractor(['mean', 'std', 'rms'])),
+    ('flat',   Flatten()),
 ])
-# (1, 8760, 5) → (1, 8737, 20)  — 20 features per window
+
+Xt = pipe.fit_transform(train)
+Xt_test = pipe.transform(test)
+
+# Access steps by name
+pipe['scale']   # the StandardScaler instance
+
+# sklearn-style nested get_params / set_params
+params = pipe.get_params()          # includes 'scale__eps', 'window__size', etc.
+pipe.set_params(window__size=256)   # update nested parameter
 ```
 
-### 2. HAR (variable-length) → classification
+### ChannelTransform — different transforms per channel group
 
 ```python
-pipe = Pipeline([
-    ('scale',   ChannelTransform({
-                    'acc': StandardScaler(),
-                    'gyr': RobustScaler(),
-                })),
-    ('window',  SlidingWindow(size=128, stride=64, label_strategy='repeat')),
-    ('stats',   StatisticalFeatures(['mean', 'std', 'rms', 'skew', 'kurtosis'])),
-    ('flatten', Flatten()),
-])
-# 50 ragged samples → (206, 30)  — windowed, features extracted, labels propagated
+# Fit and apply different transforms to different channel groups
+ct = ChannelTransform(
+    transforms={
+        'acc':  StandardScaler(),
+        'gyro': RobustScaler(),
+    },
+    remainder='passthrough',  # or 'drop' to discard unmatched channels
+)
 ```
 
-### 3. Audio → mel spectrogram
+### ChannelSelect — transform a subset, pass the rest through
 
 ```python
-pipe = Pipeline([
-    ('preemph', PreEmphasis(coeff=0.97)),
-    ('mel',     MelSpectrogram(n_fft=512, hop_length=160, n_mels=64, sampling_rate=16000)),
-    ('log',     LogTransform()),
-    ('scale',   StandardScaler()),
-])
-# (8, 16000, 1) → (8, 64, 97, 1)  — ready for 2D-CNN
-```
-
-### 4. Audio → framed spectral features
-
-```python
-pipe = Pipeline([
-    ('frame',    SlidingWindow(size=512, stride=256)),
-    ('features', FrameFeatureBank([
-                     ZCR(),
-                     RMS(),
-                     SpectralEntropy(),
-                     SpectralCentroid(n_fft=512, sr=16000),
-                 ])),
-    ('scale',    StandardScaler()),
-])
-# (4, 16000, 1) → (4, 61, 4)  — 4 features per frame, channels named
+# Apply BandpassFilter only to EEG channels; others pass through unchanged
+cs = ChannelSelect('eeg_*', BandpassFilter(low=0.5, high=40, sampling_rate=256))
 ```
 
 ---
 
-## Channel routing
+## sklearn integration via SklearnWrapper
 
-Apply different transforms to different channel subsets:
+`SklearnWrapper` bridges a tensorts `Pipeline` with sklearn CV tools. It handles the `y` mismatch that arises when `SlidingWindow` expands samples into windows.
 
 ```python
-# Different scalers per group
-ChannelTransform({
-    'accel': StandardScaler(),
-    'gyro':  RobustScaler(),
-})
+from tensorts import SklearnWrapper
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score, GridSearchCV
 
-# Transform specific channels, pass others through unchanged
-ChannelSelect('accel_*', ButterworthFilter(cutoff=20, btype='lowpass'))
+preprocessing = Pipeline([
+    ('scale',  StandardScaler()),
+    ('window', SlidingWindow(size=128, stride=64, label_strategy='repeat')),
+    ('fe',     make_statistical_extractor(['mean', 'std', 'rms'])),
+    ('flat',   Flatten()),
+])
+
+wrapper = SklearnWrapper(preprocessing, RandomForestClassifier(n_estimators=100))
+
+# cross_val_score — pass X and y separately (sklearn slices both independently)
+scores = cross_val_score(wrapper, X, y=X.y, cv=StratifiedKFold(5))
+
+# GridSearchCV — nested parameter format
+param_grid = {
+    'pipeline__window__size': [64, 128, 256],
+    'pipeline__window__stride': [32, 64],
+    'estimator__n_estimators': [50, 100, 200],
+}
+gs = GridSearchCV(wrapper, param_grid, cv=5, scoring='accuracy')
+gs.fit(X, y=X.y)
+print(gs.best_params_)
 ```
+
+**How it handles windowing**: when `SlidingWindow` expands B samples into B×K windows, `SklearnWrapper.fit()` uses `Xt.y` (the expanded labels) to fit the estimator. `predict()` averages window-level predictions back to sample level using `_window_counts` stored in metadata. `score()` uses `Xt.y` when sample counts differ.
 
 ---
 
-## Train / test workflow
+## End-to-end examples
 
-Splitting is outside the pipeline; fitting is inside:
+### HAR (Human Activity Recognition) — ragged recordings
 
 ```python
-from tensorts import temporal_split, stratified_temporal_split
+from tensorts import (
+    TimeTensor, Pipeline, ChannelTransform,
+    StandardScaler, RobustScaler, SlidingWindow, Flatten,
+    temporal_split, make_statistical_extractor,
+)
 
-# Temporal split (last 20% = test)
+# Ragged: each recording has a different length
+ts = TimeTensor.from_ragged(
+    recordings,
+    channels=['acc_x', 'acc_y', 'acc_z', 'gyro_x', 'gyro_y', 'gyro_z'],
+    channel_groups={'acc': 'acc_*', 'gyro': 'gyro_*'},
+    y=activity_labels,
+    metadata={'sampling_rate': 50},
+)
+
 train, test = temporal_split(ts, test_ratio=0.2)
 
-# Stratified split (preserves class balance)
-train, test = stratified_temporal_split(ts, test_ratio=0.2)
+pipe = Pipeline([
+    ('scale',  ChannelTransform({'acc': StandardScaler(), 'gyro': RobustScaler()})),
+    ('window', SlidingWindow(size=128, stride=64, label_strategy='repeat')),
+    ('stats',  make_statistical_extractor(['mean', 'std', 'rms', 'skew', 'kurtosis'])),
+    ('flat',   Flatten()),
+])
 
-# Three-way split
-train, val, test = temporal_split(ts, test_ratio=0.15, val_ratio=0.15)
+X_train = pipe.fit_transform(train)   # y embedded in train, no separate y needed
+X_test  = pipe.transform(test)
 
-# Expanding-window k-fold (no future leakage)
-folds = kfold_temporal(ts, n_folds=5)
-for train_fold, test_fold in folds:
-    pipe.fit(train_fold)
-    result = pipe.transform(test_fold)
+# 5 stats × 6 channels = 30 features per window
+print(X_train.shape)   # (n_windows, 30)
+print(X_train.y)       # window-level labels
+```
+
+### Audio — mel spectrogram pipeline
+
+```python
+from tensorts import (
+    TimeTensor, Dim, Pipeline,
+    PreEmphasis, MelSpectrogram, LogTransform, StandardScaler,
+)
+
+ts = TimeTensor(
+    data=audio_data,    # (B, 16000, 1)
+    dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
+    channels=['audio'],
+    y=labels,
+    metadata={'sampling_rate': 16000},
+)
+
+pipe = Pipeline([
+    ('pe',    PreEmphasis(coeff=0.97)),
+    ('mel',   MelSpectrogram(n_fft=512, hop_length=160, n_mels=64, sampling_rate=16000)),
+    ('log',   LogTransform()),
+    ('scale', StandardScaler()),
+])
+result = pipe.fit_transform(ts)
+# (B, 16000, 1) → (B, 64, 97, 1)  — 64 mel bins × 97 frames
+```
+
+### Custom feature extraction with FeatureExtractor
+
+```python
+from tensorts import FeatureExtractor, Dim
+
+# Single-fn: compute STFT per channel
+stft_fe = FeatureExtractor(
+    fn=lambda x: np.abs(np.fft.rfft(x, n=512)) ** 2,
+    input_dim=Dim.TIME,
+    output_dims=(Dim.FREQUENCY,),
+    name='power_spectrum',
+)
+# (B, T, C) → (B, 257, C)
+
+# Multi-fn: statistical + spectral features
+fe = FeatureExtractor(
+    functions=[
+        ('mean',   np.mean),
+        ('std',    np.std),
+        ('energy', lambda x: float(np.sum(x**2))),
+        ('zcr',    lambda x: float(np.mean(np.diff(np.signbit(x))))),
+    ],
+    input_dim=Dim.TIME,
+)
+result = fe.fit_transform(ts)
+# (B, T, C) → (B, 4, C)   — 4 features per channel
+print(fe.feature_names_out_)  # ['mean', 'std', 'energy', 'zcr']
+```
+
+### Custom preprocessing with FunctionTransform
+
+```python
+from tensorts import FunctionTransform, StatefulFunctionTransform, Scope
+from scipy.signal import butter, sosfiltfilt
+
+# Stateless: apply same filter to every sample/channel
+def apply_filter(x, fs=256):
+    sos = butter(4, [1, 40], btype='bandpass', fs=fs, output='sos')
+    return sosfiltfilt(sos, x)
+
+prefilter = FunctionTransform(fn=apply_filter, scope=Scope.PER_CHANNEL,
+                               fn_kwargs={'fs': 256})
+
+# Stateful: learn per-channel clipping bounds from training data
+clipper = StatefulFunctionTransform(
+    fit_fn=lambda x: {'lo': np.percentile(x, 0.5), 'hi': np.percentile(x, 99.5)},
+    transform_fn=lambda x, s: np.clip(x, s['lo'], s['hi']),
+    scope=Scope.PER_CHANNEL,
+)
+
+pipe = Pipeline([('prefilter', prefilter), ('clip', clipper), ...])
+pipe.fit(train)         # clipper learns bounds from train only
+pipe.transform(test)    # applies train bounds to test — no data leakage
 ```
 
 ---
@@ -325,77 +607,100 @@ from tensorts import from_numpy, from_csv, from_dataframe
 from tensorts import to_numpy, to_sklearn, to_dataframe
 
 # Loading
-ts = from_numpy(arr, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=[...])
-ts = from_csv('data.csv', group_by='subject_id', label_column='activity')
-ts = from_dataframe(df, channel_columns=['col_a', 'col_b'], label_column='y')
+ts = from_numpy(arr, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
+                channels=['a', 'b', 'c'], y=labels)
+
+ts = from_csv('sensors.csv',
+              group_by='subject_id',    # creates ragged TimeTensor
+              label_column='activity',
+              channel_columns=['ax', 'ay', 'az'])
+
+ts = from_dataframe(df, group_by='trial', label_column='label')
 
 # Exporting
-X, y = to_sklearn(ts)               # flattened (B, M) + labels for sklearn
-arr  = to_numpy(ts)                  # raw ndarray
-df   = to_dataframe(ts, sample_index=0)  # single sample as pandas DataFrame
+X_np, y_np = to_sklearn(ts)         # flattened (B, M) + labels for any sklearn model
+arr = to_numpy(ts)                   # raw ndarray
+df  = to_dataframe(ts, sample_index=0)  # single sample as pandas DataFrame
 ```
 
 ---
 
-## Available transforms
+## Splitting utilities
+
+```python
+from tensorts import temporal_split, stratified_temporal_split, kfold_temporal
+
+# Temporal order is always preserved — no random shuffling
+train, test = temporal_split(ts, test_ratio=0.2)
+train, val, test = temporal_split(ts, test_ratio=0.15, val_ratio=0.15)
+
+# Preserves class balance within temporal order
+train, test = stratified_temporal_split(ts, test_ratio=0.2)
+
+# Expanding-window k-fold — all train indices < all test indices (no future leakage)
+for train_fold, test_fold in kfold_temporal(ts, n_folds=5):
+    pipe.fit(train_fold)
+    result = pipe.transform(test_fold)
+```
+
+---
+
+## Available transforms — quick reference
 
 ### Preprocessing
-| Transform | Description |
-|-----------|-------------|
-| `StandardScaler` | Zero-mean, unit-variance per channel |
-| `MinMaxScaler` | Scale to `[min, max]` range per channel |
-| `RobustScaler` | Median/IQR scaling (outlier-robust) |
-| `Interpolate` | Fill NaN values (linear, nearest, forward-fill, mean) |
-| `LabelEncoder` | Encode string labels to integers |
+| Transform | Input | Output | Notes |
+|-----------|-------|--------|-------|
+| `StandardScaler` | `(B, T, C)` | same | zero-mean, unit-std per channel |
+| `MinMaxScaler` | `(B, T, C)` | same | scale to `feature_range` per channel |
+| `RobustScaler` | `(B, T, C)` | same | median/IQR per channel |
+| `Interpolate` | `(B, T, C)` with NaN | same | linear / nearest / forward-fill |
+| `LabelEncoder` | any | same | encodes `X.y` string→int |
 
 ### Temporal
-| Transform | Description |
-|-----------|-------------|
-| `SlidingWindow` | Fixed-size windows with stride; handles ragged→dense + label propagation |
-| `Pad` | Pad time axis to target length (constant, edge, reflect) |
-| `Truncate` | Truncate time axis to target length |
-| `Resample` | Resample to new time-axis length via interpolation |
+| Transform | Input | Output | Notes |
+|-----------|-------|--------|-------|
+| `SlidingWindow` | `(B, T, C)` | `(B, K, W, C)` | adds `WINDOW` axis |
+| `SlidingWindow` | ragged `(T_i, C)` | `(B_total, W, C)` | ragged→dense |
+| `Pad` | ragged | dense | pads to `target_length` |
+| `Truncate` | any | shorter | trims `TIME` axis |
+| `Resample` | any | fixed-length | linear interpolation |
 
 ### Spectral
-| Transform | Description |
-|-----------|-------------|
-| `PreEmphasis` | High-frequency boost filter |
-| `ButterworthFilter` | IIR filter (lowpass, highpass, bandpass, bandstop) |
-| `BandpassFilter` | Convenience wrapper for bandpass Butterworth |
-| `STFT` | Short-Time Fourier Transform |
-| `MelSpectrogram` | Mel-scaled spectrogram |
-| `LogTransform` | Element-wise log(x + eps) |
+| Transform | Input | Output | Notes |
+|-----------|-------|--------|-------|
+| `PreEmphasis` | `(B, T, C)` | same | high-freq boost |
+| `ButterworthFilter` | `(B, T, C)` | same | lowpass / highpass / bandpass |
+| `BandpassFilter` | `(B, T, C)` | same | convenience bandpass wrapper |
+| `STFT` | `(B, T, C)` | `(B, FREQ, T', C)` | power spectrum |
+| `MelSpectrogram` | `(B, T, C)` | `(B, mel, T', C)` | Mel filterbank |
+| `LogTransform` | any | same | `log(x + eps)` elementwise |
 
-### Feature extraction
-| Transform | Description |
-|-----------|-------------|
-| `StatisticalFeatures` | Per-window stats: mean, std, var, min, max, median, rms, skew, kurtosis, iqr, range, energy, zcr |
-| `RollingFeatures` | Rolling-window statistics along time axis |
-| `FrameFeatureBank` | Multiple per-frame extractors with shared FFT cache |
-| `ZCR` | Zero-crossing rate (frame feature) |
-| `RMS` | Root mean square energy (frame feature) |
-| `SpectralEntropy` | Spectral entropy (frame feature) |
-| `SpectralCentroid` | Spectral centroid (frame feature) |
-| `SpectralRolloff` | Spectral rolloff frequency (frame feature) |
-| `SpectralFlatness` | Spectral flatness / Wiener entropy (frame feature) |
-| `MFCC` | Mel-frequency cepstral coefficients (frame feature) |
+### Functional
+| Transform | Role | Dim schema |
+|-----------|------|-----------|
+| `FunctionTransform` | Wrap stateless fn; preprocessing | **preserved** |
+| `StatefulFunctionTransform` | Wrap stateful fn pair (fit/transform) | **preserved** |
+| `FeatureExtractor` (single-fn) | One fn changes axes | `TIME` → `output_dims` |
+| `FeatureExtractor` (multi-fn) | N fns stacked | `TIME` → `FEATURE` |
+| `make_statistical_extractor()` | Factory for multi-fn stats | `TIME` → `FEATURE` |
 
 ### Shape
-| Transform | Description |
-|-----------|-------------|
-| `Flatten` | Merge dims into single FEATURE axis |
-| `Reshape` | Reshape to new dim schema |
-| `Transpose` | Reorder axes by semantic dim names |
-| `PCA` | Principal component analysis |
-| `Squeeze` | Remove a size-1 dimension |
-| `Unsqueeze` | Add a size-1 dimension |
+| Transform | Input | Output |
+|-----------|-------|--------|
+| `Flatten` | `(B, ...)` | `(B, M)` |
+| `Reshape` | any | target dims |
+| `Transpose` | any | reordered axes |
+| `PCA` | any | `(B, n_components)` |
+| `Squeeze` | has size-1 dim | rank reduced by 1 |
+| `Unsqueeze` | any | rank increased by 1 |
 
 ### Composition
-| Transform | Description |
-|-----------|-------------|
-| `Pipeline` | Sequential transform chain with named steps |
+| Transform | Purpose |
+|-----------|---------|
+| `Pipeline` | Sequential chain with named steps |
 | `ChannelTransform` | Different transforms per channel group |
-| `ChannelSelect` | Transform a subset of channels, passthrough the rest |
+| `ChannelSelect` | Transform a subset; passthrough others |
+| `SklearnWrapper` | Bridge to sklearn CV tools |
 
 ---
 
@@ -403,9 +708,10 @@ df   = to_dataframe(ts, sample_index=0)  # single sample as pandas DataFrame
 
 | Package | Required | Used for |
 |---------|----------|----------|
-| `numpy` | yes | Core tensor operations |
+| `numpy` | yes | all tensor operations |
 | `scipy` | recommended | Butterworth filters, STFT windowing, interpolation |
 | `pandas` | optional | `from_dataframe` / `to_dataframe` |
+| `sklearn` | optional | `SklearnWrapper`, cross-validation |
 
 ---
 
