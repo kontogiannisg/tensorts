@@ -701,6 +701,100 @@ test("PIPELINE: make_statistical_extractor (built-ins + custom) in pipeline",
 
 
 # =====================================================================
+# Flatten descriptive naming
+# =====================================================================
+print("\n--- Flatten Descriptive Naming ---")
+
+def test_flatten_descriptive_names_after_multi_fn():
+    """Flatten after multi-fn FeatureExtractor produces 'fn__channel' names."""
+    from tensorts import TimeTensor, Dim, Pipeline
+    from tensorts.transforms import Flatten
+    from tensorts.transforms.functional import FeatureExtractor
+
+    data = np.random.randn(5, 100, 3)
+    channels = ["acc_x", "acc_y", "acc_z"]
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=channels)
+
+    fe = FeatureExtractor(
+        functions=[("mean", np.mean), ("std", np.std)],
+        input_dim=Dim.TIME,
+    )
+    fe.fit(ts)
+    extracted = fe.transform(ts)
+
+    flat = Flatten()
+    flat.fit(extracted)
+    result = flat.transform(extracted)
+
+    assert result.shape == (5, 6), f"Expected (5, 6), got {result.shape}"
+    expected_names = (
+        "mean__acc_x", "mean__acc_y", "mean__acc_z",
+        "std__acc_x", "std__acc_y", "std__acc_z",
+    )
+    assert tuple(result.channels.names) == expected_names, (
+        f"Expected {expected_names}, got {result.channels.names}"
+    )
+    print(f"    channels after flatten: {result.channels.names}")
+
+test("Flatten produces descriptive names after multi-fn FeatureExtractor",
+     test_flatten_descriptive_names_after_multi_fn)
+
+
+def test_flatten_generic_names_without_feature_metadata():
+    """Flatten without feature metadata falls back to f_0, f_1, ..."""
+    from tensorts import TimeTensor, Dim
+    from tensorts.transforms import Flatten
+
+    data = np.random.randn(5, 10, 3)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+
+    flat = Flatten()
+    flat.fit(ts)
+    result = flat.transform(ts)
+
+    assert result.shape == (5, 30)
+    expected = tuple(f"f_{i}" for i in range(30))
+    assert tuple(result.channels.names) == expected, (
+        f"Expected generic names, got {result.channels.names}"
+    )
+    print(f"    channels after flatten (no metadata): {result.channels.names[:5]}...")
+
+test("Flatten falls back to generic names without feature metadata",
+     test_flatten_generic_names_without_feature_metadata)
+
+
+def test_flatten_descriptive_names_in_pipeline():
+    """Pipeline: FeatureExtractor → Flatten produces descriptive names."""
+    from tensorts import TimeTensor, Dim, Pipeline
+    from tensorts.transforms import Flatten
+    from tensorts.transforms.features import make_statistical_extractor
+
+    data = np.random.randn(8, 50, 2)
+    channels = ["temp", "humidity"]
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=channels)
+
+    pipe = Pipeline([
+        ("stats", make_statistical_extractor(["mean", "std", "min"])),
+        ("flatten", Flatten()),
+    ])
+    result = pipe.fit_transform(ts)
+
+    assert result.shape == (8, 6)
+    expected = (
+        "mean__temp", "mean__humidity",
+        "std__temp", "std__humidity",
+        "min__temp", "min__humidity",
+    )
+    assert tuple(result.channels.names) == expected, (
+        f"Expected {expected}, got {result.channels.names}"
+    )
+    print(f"    pipeline channels: {result.channels.names}")
+
+test("Pipeline: FeatureExtractor → Flatten descriptive names",
+     test_flatten_descriptive_names_in_pipeline)
+
+
+# =====================================================================
 # Summary
 # =====================================================================
 print()
