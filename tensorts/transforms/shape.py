@@ -80,13 +80,34 @@ class Flatten(Transform):
                 new_dims = (Dim.BATCH, Dim.FEATURE)
 
         M = result.shape[-1]
-        feat_names = [f"f_{i}" for i in range(M)]
+        feat_names = self._build_feature_names(X, M)
 
         return X.with_data(
             result,
             dims=new_dims,
             channels=ChannelIndex(feat_names),
         )
+
+    @staticmethod
+    def _build_feature_names(X: TimeTensor, M: int) -> list[str]:
+        """Build descriptive feature names when possible.
+
+        When the input has both ``_feature_names`` metadata (set by
+        FeatureExtractor multi-fn mode) and channel names, produces
+        cross-product names like ``'mean__acc_x'``.  Otherwise falls
+        back to ``'f_0', 'f_1', ...``.
+        """
+        feat_axis_names = X.metadata.get("_feature_names")
+        ch_names = X.channels.names if X.channels is not None else None
+
+        if feat_axis_names and ch_names and len(feat_axis_names) * len(ch_names) == M:
+            names = []
+            for fn in feat_axis_names:
+                for cn in ch_names:
+                    names.append(f"{fn}__{cn}")
+            return names
+
+        return [f"f_{i}" for i in range(M)]
 
 
 # ======================================================================

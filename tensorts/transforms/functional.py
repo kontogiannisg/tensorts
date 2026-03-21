@@ -52,6 +52,13 @@ class FunctionTransform(Transform):
     fn_args : tuple — extra positional args forwarded to fn
     fn_kwargs : dict — extra keyword args forwarded to fn
     name : str or None — for repr
+
+    Note
+    ----
+    FunctionTransform preserves the dim schema — it does not rename axes.
+    If your function changes the semantic meaning of an axis (e.g., FFT
+    converts TIME → FREQUENCY), use ``FeatureExtractor`` with appropriate
+    ``output_dims`` instead, so downstream transforms see the correct schema.
     """
 
     supports_ragged = True
@@ -692,7 +699,8 @@ class FeatureExtractor(Transform):
 
         self.feature_names_out_ = feature_names
         # Channels along CHANNEL axis stay the same as input
-        return X.with_data(out, dims=new_dims, channels=X.channels)
+        meta = {**X.metadata, "_feature_names": feature_names}
+        return X.with_data(out, dims=new_dims, channels=X.channels, metadata=meta)
 
     # ------------------------------------------------------------------
     # Multi-fn mode — ragged
@@ -737,9 +745,10 @@ class FeatureExtractor(Transform):
 
         self.feature_names_out_ = feature_names
         # Channels along CHANNEL axis stay the same as input
+        meta = {**X.metadata, "_feature_names": feature_names}
         return TimeTensor(
             data=stacked, dims=new_dims, channels=X.channels,
-            y=X.y, metadata=X.metadata,
+            y=X.y, metadata=meta,
         )
 
     # ------------------------------------------------------------------
