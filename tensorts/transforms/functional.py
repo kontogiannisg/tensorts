@@ -115,7 +115,7 @@ class FunctionTransform(Transform):
         out[0, :, 0] = probe.ravel()[:T_out]
         for n in range(N):
             for c in range(C):
-                if n == 0 and c == 0:
+                if n == 0 and c == 0: # Already computed to extract T dimension
                     continue
                 result = self._call_fn(flat[n, :, c])
                 out[n, :, c] = np.asarray(result).ravel()[:T_out]
