@@ -129,7 +129,7 @@ invert = FunctionTransform(
 )
 ```
 
-**`FunctionTransform` is NOT a feature extractor** — it never changes `ndim`. Use `FeatureExtractor` when you need to collapse an axis or produce a `Dim.FEATURE` axis.
+**`FunctionTransform` is NOT a feature extractor** — it never changes `ndim` or the dim schema. If your function changes the semantic meaning of an axis (e.g., FFT converts TIME → FREQUENCY), use `FeatureExtractor` with appropriate `output_dims` instead, so downstream transforms see the correct schema.
 
 Supports ragged tensors.
 
@@ -491,6 +491,8 @@ flat = Flatten(dims=(Dim.FREQUENCY, Dim.TIME))  # flatten only specific dims
 
 # (B, FREQ, TIME', C) → (B, FREQ*TIME', C) or (B, FREQ*TIME'*C) depending on dims
 ```
+
+**Descriptive feature names:** When Flatten follows a multi-fn `FeatureExtractor`, it produces cross-product names like `mean__acc_x`, `std__acc_y` instead of generic `f_0, f_1, ...`. This relies on `_feature_names` metadata set by FeatureExtractor.
 
 ### Reshape
 
