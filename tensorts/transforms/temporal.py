@@ -27,9 +27,16 @@ class SlidingWindow(Transform):
 
     Handles both dense ``(B, T, C)`` and ragged inputs.
 
-    Dense input ``(B, T, C)`` → ``(B, K, W, C)``
-    Ragged input ``list of (T_i, C)`` → dense ``(B_total, W, C)`` where
-    ``B_total = sum of K_i`` windows across all samples.
+    Default (``flatten_batch=False``):
+        Both dense and ragged → ``(B, K, W, C)`` with dims
+        ``(BATCH, WINDOW, TIME, CHANNEL)``.  Ragged requires all samples
+        to produce the same number of windows K.
+
+    ``flatten_batch=True``:
+        Both dense and ragged → ``(B_total, W, C)`` with dims
+        ``(BATCH, TIME, CHANNEL)``.  Batch and window axes are merged.
+        Labels are expanded via ``label_strategy`` and ``_window_counts``
+        metadata is stored for downstream aggregation.
 
     Parameters
     ----------
@@ -38,14 +45,12 @@ class SlidingWindow(Transform):
     stride : int or None
         Step between windows.  If None, defaults to ``size`` (no overlap).
     label_strategy : str
-        How to propagate labels when the sample count changes:
+        How to propagate labels when ``flatten_batch=True``:
         - ``'repeat'``: each window inherits the source sample's label.
         - ``'last'``: only the last window of each sample gets the label (others get -1).
-        - ``'majority'``: (reserved for future use).
     flatten_batch : bool
-        If True (default for ragged), merge the batch and window axes into one
-        so the output is ``(B_total, W, C)``.  If False, output is ``(B, K, W, C)``
-        (requires all samples to produce the same K).
+        If True, merge batch and window axes into one so the output is
+        ``(B_total, W, C)``.  If False (default), output is ``(B, K, W, C)``.
     drop_last : bool
         If True, discard the last window if it's shorter than ``size``.
     """
@@ -58,7 +63,7 @@ class SlidingWindow(Transform):
         size: int,
         stride: int | None = None,
         label_strategy: str = "repeat",
-        flatten_batch: bool = True,
+        flatten_batch: bool = False,
         drop_last: bool = True,
     ) -> None:
         super().__init__()
@@ -181,6 +186,32 @@ class SlidingWindow(Transform):
         t_dim_idx = new_dims.index(Dim.TIME)
         new_dims.insert(t_dim_idx, Dim.WINDOW)
         # TIME remains but now represents within-window time
+
+        if self.flatten_batch:
+            B = result.shape[0]
+            K = result.shape[1]
+            flat_result = result.reshape(B * K, self.size, C)
+            window_counts = [K] * B
+
+            new_y = None
+            if X.y is not None:
+                all_labels = []
+                for i in range(B):
+                    label = X.y[i]
+                    if self.label_strategy == "repeat":
+                        all_labels.extend([label] * K)
+                    elif self.label_strategy == "last":
+                        all_labels.extend([-1] * (K - 1) + [label])
+                new_y = np.array(all_labels)
+
+            meta = {**X.metadata, "_window_counts": window_counts}
+            return TimeTensor(
+                data=flat_result,
+                dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
+                channels=X.channels,
+                y=new_y,
+                metadata=meta,
+            )
 
         return X.with_data(result, dims=tuple(new_dims))
 

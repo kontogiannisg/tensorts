@@ -578,7 +578,7 @@ def test_har_ragged_statistical_pipeline():
 
     pipe = Pipeline([
         ("scale",  StandardScaler()),
-        ("window", SlidingWindow(size=64, stride=32, label_strategy="repeat")),
+        ("window", SlidingWindow(size=64, stride=32, label_strategy="repeat", flatten_batch=True)),
         ("stats",  make_statistical_extractor(["mean", "std", "rms", "zcr", "energy"])),
         ("flat",   Flatten()),
     ])
@@ -647,7 +647,7 @@ def test_multi_fn_in_windowed_ragged_pipeline():
 
     pipe = Pipeline([
         ("scale",  RobustScaler()),
-        ("window", SlidingWindow(size=50, stride=25, label_strategy="repeat")),
+        ("window", SlidingWindow(size=50, stride=25, label_strategy="repeat", flatten_batch=True)),
         ("fe",     fe),
         ("flat",   Flatten()),
     ])

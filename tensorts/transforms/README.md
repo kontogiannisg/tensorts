@@ -358,20 +358,21 @@ from tensorts.transforms import SlidingWindow
 sw = SlidingWindow(
     size=128,               # window length in samples
     stride=64,              # step (default = size, no overlap)
-    label_strategy="repeat",  # 'repeat' | 'last'
-    flatten_batch=True,     # True (default for ragged)
+    flatten_batch=False,    # default: 4D output (B, K, W, C)
     drop_last=True,         # discard partial last window
 )
 ```
 
 **Output shapes:**
 
-| Input | Output |
-|---|---|
-| Dense `(B, T, C)` | `(B, K, W, C)` with dims `(BATCH, WINDOW, TIME, CHANNEL)` |
-| Ragged `list of (T_i, C)` | Dense `(B_total, W, C)` — all windows from all samples stacked |
+| `flatten_batch` | Input | Output | Dims |
+|---|---|---|---|
+| `False` (default) | Dense `(B, T, C)` | `(B, K, W, C)` | `(BATCH, WINDOW, TIME, CHANNEL)` |
+| `False` (default) | Ragged `[(T_i, C)]` | `(B, K, W, C)` | Same — requires all samples produce same K |
+| `True` | Dense `(B, T, C)` | `(B*K, W, C)` | `(BATCH, TIME, CHANNEL)` |
+| `True` | Ragged `[(T_i, C)]` | `(B_total, W, C)` | Same — K may differ per sample |
 
-Label propagation:
+When `flatten_batch=True`, labels are expanded via `label_strategy` and `_window_counts` metadata is stored:
 - `label_strategy="repeat"`: each window inherits its source sample's label
 - `label_strategy="last"`: only the last window per sample is labelled (`-1` for others)
 

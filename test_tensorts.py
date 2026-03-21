@@ -286,7 +286,7 @@ def test_y_propagation_through_sliding_window():
     y = np.array([0, 1])
     X = TimeTensor.from_ragged(samples, y=y)
 
-    win = SlidingWindow(size=50, stride=25, label_strategy="repeat")
+    win = SlidingWindow(size=50, stride=25, label_strategy="repeat", flatten_batch=True)
     Xt = win.fit_transform(X)
 
     # Each sample's windows all get the sample's label
@@ -474,7 +474,7 @@ def test_sliding_window_ragged():
     y = np.array([0, 1])
     ts = TimeTensor.from_ragged(samples, channels=["a", "b", "c"], y=y)
 
-    result = SlidingWindow(size=50, stride=25, label_strategy="repeat").fit_transform(ts)
+    result = SlidingWindow(size=50, stride=25, label_strategy="repeat", flatten_batch=True).fit_transform(ts)
 
     assert not result.is_ragged
     assert result.shape[0] == 10         # 3 + 7 windows total
@@ -483,7 +483,41 @@ def test_sliding_window_ragged():
     assert all(result.y[:3] == 0)        # first 3 windows → label 0
     assert all(result.y[3:] == 1)
 
-test("SlidingWindow: ragged → dense with label propagation", test_sliding_window_ragged)
+test("SlidingWindow: ragged → dense with label propagation (flatten_batch=True)", test_sliding_window_ragged)
+
+
+def test_sliding_window_dense_flatten_batch():
+    from tensorts import TimeTensor, Dim, SlidingWindow
+    data = np.arange(40, dtype=float).reshape(2, 20, 1)
+    y = np.array([0, 1])
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), y=y)
+    result = SlidingWindow(size=5, stride=5, flatten_batch=True).fit_transform(ts)
+    # 2 samples × 4 windows = 8 total, flattened
+    assert result.shape == (8, 5, 1)
+    assert result.dims == (Dim.BATCH, Dim.TIME, Dim.CHANNEL)
+    assert result.metadata["_window_counts"] == [4, 4]
+    assert len(result.y) == 8
+    assert all(result.y[:4] == 0)
+    assert all(result.y[4:] == 1)
+
+test("SlidingWindow: dense flatten_batch=True → (B*K,W,C) with label expansion",
+     test_sliding_window_dense_flatten_batch)
+
+
+def test_sliding_window_ragged_4d():
+    from tensorts import TimeTensor, Dim, SlidingWindow
+    # Equal-length samples → same K → can stack to 4D
+    samples = [np.random.randn(100, 3), np.random.randn(100, 3)]
+    y = np.array([0, 1])
+    ts = TimeTensor.from_ragged(samples, channels=["a", "b", "c"], y=y)
+    result = SlidingWindow(size=50, stride=25).fit_transform(ts)  # default flatten_batch=False
+    # (100-50)/25+1 = 3 windows each
+    assert result.shape == (2, 3, 50, 3)
+    assert result.has_dim(Dim.WINDOW)
+    np.testing.assert_array_equal(result.y, y)  # labels unchanged (no expansion)
+
+test("SlidingWindow: ragged (equal K) → 4D (B,K,W,C), default flatten_batch=False",
+     test_sliding_window_ragged_4d)
 
 
 def test_pad_ragged_to_dense():
@@ -838,7 +872,7 @@ def test_pipeline_air_quality_dense():
     pipe = Pipeline([
         ("impute", Interpolate(method="linear")),
         ("scale",  StandardScaler()),
-        ("window", SlidingWindow(size=50, stride=25, label_strategy="repeat")),
+        ("window", SlidingWindow(size=50, stride=25)),
         ("stats",  make_statistical_extractor(["mean", "std", "min", "max"])),
     ])
     result = pipe.fit_transform(ts)
@@ -876,7 +910,7 @@ def test_pipeline_har_ragged():
 
     pipe = Pipeline([
         ("scale",  ChannelTransform({"acc": StandardScaler(), "gyro": RobustScaler()})),
-        ("window", SlidingWindow(size=64, stride=32, label_strategy="repeat")),
+        ("window", SlidingWindow(size=64, stride=32, label_strategy="repeat", flatten_batch=True)),
         ("stats",  make_statistical_extractor(["mean", "std", "rms", "zcr"])),
         ("flat",   Flatten()),
     ])
@@ -946,7 +980,7 @@ def test_pipeline_feature_extractor_multi_fn():
 
     pipe = Pipeline([
         ("scale",  StandardScaler()),
-        ("window", SlidingWindow(size=50, stride=25, label_strategy="repeat")),
+        ("window", SlidingWindow(size=50, stride=25, label_strategy="repeat", flatten_batch=True)),
         ("fe",     fe),
         ("flat",   Flatten()),
     ])

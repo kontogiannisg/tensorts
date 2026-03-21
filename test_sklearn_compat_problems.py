@@ -196,7 +196,7 @@ def problem1_har_crossval():
         ("pre_emph", FunctionTransform(pre_emphasis, scope=Scope.PER_CHANNEL,
                                        fn_kwargs={"coeff": 0.97}, name="pre_emphasis")),
         ("scaler",   StandardScaler()),
-        ("window",   SlidingWindow(size=100, stride=50, label_strategy="repeat")),
+        ("window",   SlidingWindow(size=100, stride=50, label_strategy="repeat", flatten_batch=True)),
         ("stats",    make_statistical_extractor(["mean", "std", "min", "max", "energy"])),
         ("flatten",  Flatten()),
         ("pca",      PCA(n_components=0.95)),
@@ -493,7 +493,7 @@ def problem4_financial_gridsearch():
             transform=FunctionTransform(log1p_fn, scope=Scope.PER_CHANNEL, name="log1p"),
         )),
         ("scaler",   RobustScaler()),
-        ("window",   SlidingWindow(size=50, stride=25, label_strategy="repeat")),
+        ("window",   SlidingWindow(size=50, stride=25, label_strategy="repeat", flatten_batch=True)),
         ("autocorr", FeatureExtractor(
             fn=autocorr_lag1,
             input_dim=Dim.TIME,

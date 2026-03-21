@@ -180,7 +180,7 @@ gs = GridSearchCV(wrapper, param_grid)
 gs.fit(X, y=X.y)
 ```
 
-The key difference: when `SlidingWindow` is in the pipeline, it expands B samples into B×K windows and propagates labels into `Xt.y`. In the sklearn path, `SklearnWrapper` uses `Xt.y` internally so the expanded label count matches the expanded sample count.
+The key difference: when `SlidingWindow(flatten_batch=True)` is in the pipeline, it expands B samples into B×K windows and propagates labels into `Xt.y`. In the sklearn path, `SklearnWrapper` uses `Xt.y` internally so the expanded label count matches the expanded sample count.
 
 ---
 
@@ -217,9 +217,11 @@ All preprocessing transforms support ragged input and preserve it.
 ```python
 from tensorts import SlidingWindow, Pad, Truncate, Resample
 
-# Dense: (B, T, C) → (B, K, W, C)  where K = num windows
-# Ragged: list(T_i, C) → dense (B_total, W, C)  all windows flat
-SlidingWindow(size=128, stride=64, label_strategy='repeat')
+# Default: both dense and ragged → (B, K, W, C)
+SlidingWindow(size=128, stride=64)
+
+# flatten_batch=True: both → (B_total, W, C) with label expansion
+SlidingWindow(size=128, stride=64, flatten_batch=True, label_strategy='repeat')
 
 # Ragged → dense (pads to target_length)
 Pad(target_length=256, mode='constant', value=0.0)
@@ -455,7 +457,7 @@ from sklearn.model_selection import cross_val_score, GridSearchCV
 
 preprocessing = Pipeline([
     ('scale',  StandardScaler()),
-    ('window', SlidingWindow(size=128, stride=64, label_strategy='repeat')),
+    ('window', SlidingWindow(size=128, stride=64, flatten_batch=True, label_strategy='repeat')),
     ('fe',     make_statistical_extractor(['mean', 'std', 'rms'])),
     ('flat',   Flatten()),
 ])
@@ -476,7 +478,7 @@ gs.fit(X, y=X.y)
 print(gs.best_params_)
 ```
 
-**How it handles windowing**: when `SlidingWindow` expands B samples into B×K windows, `SklearnWrapper.fit()` uses `Xt.y` (the expanded labels) to fit the estimator. `predict()` averages window-level predictions back to sample level using `_window_counts` stored in metadata. `score()` uses `Xt.y` when sample counts differ.
+**How it handles windowing**: when `SlidingWindow(flatten_batch=True)` expands B samples into B×K windows, `SklearnWrapper.fit()` uses `Xt.y` (the expanded labels) to fit the estimator. `predict()` averages window-level predictions back to sample level using `_window_counts` stored in metadata. `score()` uses `Xt.y` when sample counts differ.
 
 ---
 
@@ -504,7 +506,7 @@ train, test = temporal_split(ts, test_ratio=0.2)
 
 pipe = Pipeline([
     ('scale',  ChannelTransform({'acc': StandardScaler(), 'gyro': RobustScaler()})),
-    ('window', SlidingWindow(size=128, stride=64, label_strategy='repeat')),
+    ('window', SlidingWindow(size=128, stride=64, flatten_batch=True, label_strategy='repeat')),
     ('stats',  make_statistical_extractor(['mean', 'std', 'rms', 'skew', 'kurtosis'])),
     ('flat',   Flatten()),
 ])
@@ -660,7 +662,8 @@ for train_fold, test_fold in kfold_temporal(ts, n_folds=5):
 | Transform | Input | Output | Notes |
 |-----------|-------|--------|-------|
 | `SlidingWindow` | `(B, T, C)` | `(B, K, W, C)` | adds `WINDOW` axis |
-| `SlidingWindow` | ragged `(T_i, C)` | `(B_total, W, C)` | ragged→dense |
+| `SlidingWindow` | ragged `(T_i, C)` | `(B, K, W, C)` | ragged→dense (requires equal K) |
+| `SlidingWindow(flatten_batch=True)` | any | `(B_total, W, C)` | batch×windows merged |
 | `Pad` | ragged | dense | pads to `target_length` |
 | `Truncate` | any | shorter | trims `TIME` axis |
 | `Resample` | any | fixed-length | linear interpolation |
