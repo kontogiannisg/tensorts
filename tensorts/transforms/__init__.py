@@ -14,7 +14,11 @@ from .functional import (
 from .preprocessing import (
     Interpolate,
     LabelEncoder,
+    MaxAbsScaler,
     MinMaxScaler,
+    Normalizer,
+    PowerTransformer,
+    QuantileTransformer,
     RobustScaler,
     StandardScaler,
 )
@@ -49,7 +53,9 @@ __all__ = [
     # Features
     "make_statistical_extractor",
     # Preprocessing
-    "StandardScaler", "MinMaxScaler", "RobustScaler", "Interpolate", "LabelEncoder",
+    "StandardScaler", "MinMaxScaler", "RobustScaler", "MaxAbsScaler",
+    "Normalizer", "PowerTransformer", "QuantileTransformer",
+    "Interpolate", "LabelEncoder",
     # Temporal
     "SlidingWindow", "Pad", "Truncate", "Resample",
     # Spectral

@@ -8,7 +8,9 @@ Pipeline:
     Pipeline, Transform, ChannelTransform, ChannelSelect
 
 Transforms:
-    StandardScaler, MinMaxScaler, RobustScaler, Interpolate, LabelEncoder,
+    StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler,
+    Normalizer, PowerTransformer, QuantileTransformer,
+    Interpolate, LabelEncoder,
     SlidingWindow, Pad, Truncate, Resample,
     PreEmphasis, ButterworthFilter, BandpassFilter, STFT, MelSpectrogram, LogTransform,
     FunctionTransform, StatefulFunctionTransform,
@@ -43,11 +45,15 @@ from .transforms import (
     LabelEncoder,
     LogTransform,
     MelSpectrogram,
+    MaxAbsScaler,
     MinMaxScaler,
+    Normalizer,
     Pad,
     PCA,
     Pipeline,
+    PowerTransformer,
     PreEmphasis,
+    QuantileTransformer,
     Resample,
     Reshape,
     RobustScaler,
