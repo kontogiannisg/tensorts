@@ -27,13 +27,13 @@ jobs:
           pip install -e ".[all]"
 
       - name: Run core tests
-        run: python test_tensorts.py
+        run: python tests/test_tensorts.py
 
       - name: Run feature extractor tests
-        run: python test_feature_extractor.py
+        run: python tests/test_feature_extractor.py
 
       - name: Run function transform tests
-        run: python test_function_transform.py
+        run: python tests/test_function_transform.py
 
       - name: Run sklearn compat tests
-        run: python test_sklearn_compat_problems.py
+        run: python tests/test_sklearn_compat_problems.py

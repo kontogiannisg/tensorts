@@ -11,10 +11,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Tests use a custom harness (not pytest). Run each suite directly:
 
 ```bash
-python test_tensorts.py                  # 62 tests — core + all transforms
-python test_feature_extractor.py         # 31 tests — multi-fn extraction + flatten naming
-python test_function_transform.py        # 21 tests — stateful/stateless wrapping
-python test_sklearn_compat_problems.py   # 4 end-to-end sklearn integration problems
+python tests/test_tensorts.py                  # 62 tests — core + all transforms
+python tests/test_feature_extractor.py         # 31 tests — multi-fn extraction + flatten naming
+python tests/test_function_transform.py        # 21 tests — stateful/stateless wrapping
+python tests/test_sklearn_compat_problems.py   # 4 end-to-end sklearn integration problems
 ```
 
 There are no single-test flags. To run one test, comment out others or extract the test function and call it directly.
