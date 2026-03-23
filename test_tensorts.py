@@ -443,6 +443,180 @@ def test_interpolate():
 test("Interpolate: linear NaN filling", test_interpolate)
 
 
+def test_maxabs_scaler_dense():
+    from tensorts import TimeTensor, Dim, MaxAbsScaler
+    data = np.random.randn(16, 50, 3) * 100
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+    scaler = MaxAbsScaler()
+    result = scaler.fit_transform(ts)
+    assert result.data.min() >= -1.01
+    assert result.data.max() <= 1.01
+    # Round-trip
+    restored = scaler.inverse_transform(result)
+    np.testing.assert_allclose(restored.data, ts.data, atol=1e-6)
+
+test("MaxAbsScaler: dense — scales to [-1, 1], round-trip", test_maxabs_scaler_dense)
+
+
+def test_maxabs_scaler_ragged():
+    from tensorts import TimeTensor, MaxAbsScaler
+    samples = [np.random.randn(np.random.randint(50, 150), 2) * 50 for _ in range(20)]
+    ts = TimeTensor.from_ragged(samples, channels=["a", "b"])
+    scaler = MaxAbsScaler()
+    result = scaler.fit_transform(ts)
+    assert result.is_ragged
+    all_data = np.concatenate(result._samples, axis=0)
+    assert all_data.max() <= 1.01
+    # Round-trip
+    restored = scaler.inverse_transform(result)
+    for i in range(len(samples)):
+        np.testing.assert_allclose(restored._samples[i], ts._samples[i], atol=1e-6)
+
+test("MaxAbsScaler: ragged — preserves raggedness, round-trip", test_maxabs_scaler_ragged)
+
+
+def test_normalizer_l2():
+    from tensorts import TimeTensor, Dim, Normalizer
+    data = np.random.randn(8, 50, 3)
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+    result = Normalizer(norm="l2").fit_transform(ts)
+    assert result.shape == ts.shape
+    # Each sample should have L2 norm ≈ 1
+    for i in range(8):
+        norm = np.sqrt(np.sum(result.data[i] ** 2))
+        assert abs(norm - 1.0) < 0.01, f"Sample {i} norm={norm}"
+
+test("Normalizer: L2 — per-sample unit norm", test_normalizer_l2)
+
+
+def test_normalizer_l1():
+    from tensorts import TimeTensor, Dim, Normalizer
+    data = np.abs(np.random.randn(8, 50, 3)) + 0.1
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+    result = Normalizer(norm="l1").fit_transform(ts)
+    for i in range(8):
+        norm = np.sum(np.abs(result.data[i]))
+        assert abs(norm - 1.0) < 0.01, f"Sample {i} L1 norm={norm}"
+
+test("Normalizer: L1 — per-sample unit L1 norm", test_normalizer_l1)
+
+
+def test_normalizer_ragged():
+    from tensorts import TimeTensor, Normalizer
+    samples = [np.random.randn(80, 2), np.random.randn(120, 2)]
+    ts = TimeTensor.from_ragged(samples, channels=["a", "b"])
+    result = Normalizer(norm="l2").fit_transform(ts)
+    assert result.is_ragged
+    for s in result._samples:
+        assert abs(np.sqrt(np.sum(s ** 2)) - 1.0) < 0.01
+
+test("Normalizer: ragged — per-sample L2", test_normalizer_ragged)
+
+
+def test_power_transformer_dense():
+    from tensorts import TimeTensor, Dim, PowerTransformer
+    # Skewed data
+    data = np.exp(np.random.randn(50, 100, 2))
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+    pt = PowerTransformer(standardize=True)
+    result = pt.fit_transform(ts)
+    assert result.shape == ts.shape
+    assert pt.lambdas_ is not None
+    assert len(pt.lambdas_) == 2
+    # After transform + standardize: mean ≈ 0, std ≈ 1
+    for c in range(2):
+        ch_data = result.data[:, :, c].ravel()
+        assert abs(np.mean(ch_data)) < 0.2, f"Channel {c} mean={np.mean(ch_data)}"
+        assert abs(np.std(ch_data) - 1.0) < 0.2, f"Channel {c} std={np.std(ch_data)}"
+    # Round-trip
+    restored = pt.inverse_transform(result)
+    np.testing.assert_allclose(restored.data, ts.data, atol=0.1)
+
+test("PowerTransformer: dense — Yeo-Johnson + standardize, round-trip", test_power_transformer_dense)
+
+
+def test_power_transformer_ragged():
+    from tensorts import TimeTensor, PowerTransformer
+    samples = [np.exp(np.random.randn(80, 2)) for _ in range(15)]
+    ts = TimeTensor.from_ragged(samples, channels=["a", "b"])
+    pt = PowerTransformer()
+    result = pt.fit_transform(ts)
+    assert result.is_ragged
+    restored = pt.inverse_transform(result)
+    for i in range(len(samples)):
+        np.testing.assert_allclose(restored._samples[i], ts._samples[i], atol=0.1)
+
+test("PowerTransformer: ragged — round-trip", test_power_transformer_ragged)
+
+
+def test_quantile_transformer_uniform():
+    from tensorts import TimeTensor, Dim, QuantileTransformer
+    data = np.random.randn(50, 100, 3) * 10
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+    qt = QuantileTransformer(n_quantiles=100, output_distribution="uniform")
+    result = qt.fit_transform(ts)
+    assert result.shape == ts.shape
+    # Output should be roughly in [0, 1]
+    assert result.data.min() >= -0.01
+    assert result.data.max() <= 1.01
+    # Round-trip
+    restored = qt.inverse_transform(result)
+    np.testing.assert_allclose(restored.data, ts.data, atol=0.5)
+
+test("QuantileTransformer: uniform — maps to [0, 1], round-trip", test_quantile_transformer_uniform)
+
+
+def test_quantile_transformer_ragged():
+    from tensorts import TimeTensor, QuantileTransformer
+    samples = [np.random.randn(80, 2) * 10 for _ in range(20)]
+    ts = TimeTensor.from_ragged(samples, channels=["a", "b"])
+    qt = QuantileTransformer(n_quantiles=50, output_distribution="uniform")
+    result = qt.fit_transform(ts)
+    assert result.is_ragged
+    all_data = np.concatenate(result._samples, axis=0)
+    assert all_data.min() >= -0.01
+    assert all_data.max() <= 1.01
+
+test("QuantileTransformer: ragged — maps to [0, 1]", test_quantile_transformer_ragged)
+
+
+def test_minmax_inverse_transform():
+    from tensorts import TimeTensor, Dim, MinMaxScaler
+    data = np.random.randn(16, 50, 3) * 100
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    result = scaler.fit_transform(ts)
+    restored = scaler.inverse_transform(result)
+    np.testing.assert_allclose(restored.data, ts.data, atol=1e-6)
+
+test("MinMaxScaler: inverse_transform round-trip", test_minmax_inverse_transform)
+
+
+def test_robust_inverse_transform():
+    from tensorts import TimeTensor, Dim, RobustScaler
+    data = np.random.randn(16, 50, 2) * 10
+    ts = TimeTensor(data=data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+    scaler = RobustScaler()
+    result = scaler.fit_transform(ts)
+    restored = scaler.inverse_transform(result)
+    np.testing.assert_allclose(restored.data, ts.data, atol=1e-6)
+
+test("RobustScaler: inverse_transform round-trip", test_robust_inverse_transform)
+
+
+def test_standard_inverse_ragged():
+    from tensorts import TimeTensor, StandardScaler
+    samples = [np.random.randn(80, 2) * 5 + 3 for _ in range(10)]
+    ts = TimeTensor.from_ragged(samples, channels=["a", "b"])
+    scaler = StandardScaler()
+    result = scaler.fit_transform(ts)
+    restored = scaler.inverse_transform(result)
+    for i in range(len(samples)):
+        np.testing.assert_allclose(restored._samples[i], ts._samples[i], atol=1e-6)
+
+test("StandardScaler: ragged inverse_transform round-trip", test_standard_inverse_ragged)
+
+
 # =====================================================================
 # 5. TEMPORAL TRANSFORMS
 # =====================================================================
