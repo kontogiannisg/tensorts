@@ -7,11 +7,8 @@ Filter transforms use scipy.signal internally.
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 
-from ..core.channels import ChannelIndex
 from ..core.dims import Dim
 from ..core.tensor import TimeTensor
 from .base import Scope, Transform
