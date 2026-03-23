@@ -22,18 +22,19 @@ tensorts solves these by making the axis system explicit and carrying labels, ch
 ## Installation
 
 ```bash
-# Add tensorts/ to your project (no package manager needed yet)
-pip install numpy scipy
-# Optional: pip install pandas  (for from_csv / to_dataframe)
+pip install -e .               # core (numpy only)
+pip install -e ".[all]"        # all optional deps (scipy, scikit-learn, pandas)
 ```
+
+Optional dependency groups: `spectral` (scipy), `sklearn` (scikit-learn), `io` (pandas), `dev` (all + jupyter).
 
 Run the test suite to verify:
 
 ```bash
-python test_tensorts.py         # 48 tests
-python test_feature_extractor.py   # 28 tests
-python test_function_transform.py  # 21 tests
-python test_sklearn_compat_problems.py  # 4 real-world problems
+python tests/test_tensorts.py                  # 62 tests
+python tests/test_feature_extractor.py         # 31 tests
+python tests/test_function_transform.py        # 21 tests
+python tests/test_sklearn_compat_problems.py   # 4 real-world problems
 ```
 
 ---
@@ -51,7 +52,9 @@ tensorts/
 │
 ├── transforms/          — All transforms (sklearn fit/transform protocol)
 │   ├── base.py          — Transform ABC, Pipeline, ChannelTransform, ChannelSelect, Scope
-│   ├── preprocessing.py — StandardScaler, MinMaxScaler, RobustScaler, Interpolate, LabelEncoder
+│   ├── preprocessing.py — StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler,
+│   │                       Normalizer, PowerTransformer, QuantileTransformer,
+│   │                       Interpolate, LabelEncoder
 │   ├── temporal.py      — SlidingWindow, Pad, Truncate, Resample
 │   ├── spectral.py      — PreEmphasis, ButterworthFilter, BandpassFilter, STFT,
 │   │                       MelSpectrogram, LogTransform
@@ -201,11 +204,19 @@ Transforms declare their operational scope:
 ### Preprocessing
 
 ```python
-from tensorts import StandardScaler, MinMaxScaler, RobustScaler, Interpolate, LabelEncoder
+from tensorts import (
+    StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler,
+    Normalizer, PowerTransformer, QuantileTransformer,
+    Interpolate, LabelEncoder,
+)
 
 StandardScaler()                          # zero-mean, unit-std per channel
 MinMaxScaler(feature_range=(0, 1))        # scale to [0, 1] per channel
 RobustScaler(quantile_range=(25, 75))     # median + IQR (outlier-robust)
+MaxAbsScaler()                            # scale by max abs value → [-1, 1]
+Normalizer(norm='l2')                     # per-sample L1/L2/max normalization
+PowerTransformer(method='yeo-johnson')    # Yeo-Johnson → Gaussian per channel
+QuantileTransformer(n_quantiles=1000)     # quantile mapping → uniform or normal
 Interpolate(method='linear')              # fill NaN values
 LabelEncoder()                            # encode string y labels to integers
 ```
@@ -655,6 +666,10 @@ for train_fold, test_fold in kfold_temporal(ts, n_folds=5):
 | `StandardScaler` | `(B, T, C)` | same | zero-mean, unit-std per channel |
 | `MinMaxScaler` | `(B, T, C)` | same | scale to `feature_range` per channel |
 | `RobustScaler` | `(B, T, C)` | same | median/IQR per channel |
+| `MaxAbsScaler` | `(B, T, C)` | same | scale by max abs → [-1, 1] |
+| `Normalizer` | `(B, T, C)` | same | per-sample L1/L2/max norm (stateless) |
+| `PowerTransformer` | `(B, T, C)` | same | Yeo-Johnson → Gaussian per channel |
+| `QuantileTransformer` | `(B, T, C)` | same | quantile mapping → uniform/normal |
 | `Interpolate` | `(B, T, C)` with NaN | same | linear / nearest / forward-fill |
 | `LabelEncoder` | any | same | encodes `X.y` string→int |
 
