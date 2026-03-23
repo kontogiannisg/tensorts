@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tensorts"
+version = "0.1.0"
+description = "A channel-aware, shape-flexible tensor pipeline for multivariate time series"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "George Kontogiannhs" },
+]
+keywords = ["time-series", "multivariate", "pipeline", "tensor", "sklearn", "preprocessing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+dependencies = [
+    "numpy>=1.23",
+]
+
+[project.optional-dependencies]
+spectral = ["scipy>=1.9"]
+sklearn = ["scikit-learn>=1.2"]
+io = ["pandas>=1.5"]
+all = [
+    "scipy>=1.9",
+    "scikit-learn>=1.2",
+    "pandas>=1.5",
+]
+dev = [
+    "scipy>=1.9",
+    "scikit-learn>=1.2",
+    "pandas>=1.5",
+    "jupyter",
+]
+
+[project.urls]
+Repository = "https://github.com/gkontogiannhs/tensorts"
+
+[tool.setuptools.packages.find]
+include = ["tensorts*"]
