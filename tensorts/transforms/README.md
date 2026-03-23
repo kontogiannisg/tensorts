@@ -318,6 +318,52 @@ from tensorts.transforms import RobustScaler
 scaler = RobustScaler()
 ```
 
+### MaxAbsScaler
+
+Scale each channel by its maximum absolute value → values in [-1, 1]. Preserves sparsity.
+
+```python
+from tensorts.transforms import MaxAbsScaler
+
+scaler = MaxAbsScaler()
+```
+
+### Normalizer
+
+Per-sample L1/L2/max normalization. Stateless (no fit step). Each `(T, C)` sample is normalized independently.
+
+```python
+from tensorts.transforms import Normalizer
+
+norm = Normalizer(norm="l2")   # or "l1", "max"
+```
+
+### PowerTransformer
+
+Yeo-Johnson power transform to make data more Gaussian. Finds optimal lambda per channel. Optionally standardizes afterward.
+
+```python
+from tensorts.transforms import PowerTransformer
+
+pt = PowerTransformer(standardize=True)
+pt.fit_transform(X)
+pt.lambdas_   # fitted lambda per channel
+pt.inverse_transform(Xt)   # reversible
+```
+
+### QuantileTransformer
+
+Map each channel's distribution to uniform [0,1] or normal via quantile mapping. Robust to outliers.
+
+```python
+from tensorts.transforms import QuantileTransformer
+
+qt = QuantileTransformer(n_quantiles=1000, output_distribution="uniform")
+# output_distribution="normal" requires scipy
+qt.fit_transform(X)
+qt.inverse_transform(Xt)   # reversible
+```
+
 ### LabelEncoder
 
 Encode string/categorical labels to integers and back.

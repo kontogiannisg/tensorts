@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Tests use a custom harness (not pytest). Run each suite directly:
 
 ```bash
-python test_tensorts.py                  # 50 tests — core + all transforms
+python test_tensorts.py                  # 62 tests — core + all transforms
 python test_feature_extractor.py         # 31 tests — multi-fn extraction + flatten naming
 python test_function_transform.py        # 21 tests — stateful/stateless wrapping
 python test_sklearn_compat_problems.py   # 4 end-to-end sklearn integration problems
@@ -32,7 +32,7 @@ Each `.py` test file has a corresponding `.ipynb` notebook that mirrors it step-
 ### Transforms (`tensorts/transforms/`)
 
 - **`base.py`** — `Transform` ABC, `Pipeline`, `ChannelTransform`, `ChannelSelect`, `Scope` enum (PER_CHANNEL, PER_SAMPLE, GLOBAL, ELEMENTWISE)
-- **`preprocessing.py`** — StandardScaler, MinMaxScaler, RobustScaler, Interpolate, LabelEncoder
+- **`preprocessing.py`** — StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler, Normalizer, PowerTransformer, QuantileTransformer, Interpolate, LabelEncoder
 - **`temporal.py`** — SlidingWindow (the critical ragged→dense boundary), Pad, Truncate, Resample
 - **`spectral.py`** — PreEmphasis, Butterworth, STFT, MelSpectrogram, LogTransform
 - **`functional.py`** — FunctionTransform, StatefulFunctionTransform, FeatureExtractor (single-fn and multi-fn modes)
