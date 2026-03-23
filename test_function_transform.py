@@ -563,3 +563,5 @@ if FAIL == 0:
 else:
     print(f"FAILURES: {FAIL}")
 print("=" * 60)
+import sys
+sys.exit(1 if FAIL > 0 else 0)
