@@ -34,6 +34,7 @@ class Flatten(Transform):
     """
 
     scope = Scope.GLOBAL
+    supports_partial_fit = True
 
     def __init__(self, dims: tuple[Dim, ...] | None = None) -> None:
         super().__init__()
@@ -127,6 +128,7 @@ class Reshape(Transform):
     """
 
     scope = Scope.GLOBAL
+    supports_partial_fit = True
 
     def __init__(
         self,
@@ -161,6 +163,7 @@ class Transpose(Transform):
     """
 
     scope = Scope.GLOBAL
+    supports_partial_fit = True
 
     def __init__(self, order: tuple[Dim, ...]) -> None:
         super().__init__()
@@ -278,6 +281,7 @@ class Squeeze(Transform):
     """Remove a size-1 dimension by semantic name."""
 
     scope = Scope.GLOBAL
+    supports_partial_fit = True
 
     def __init__(self, dim: Dim) -> None:
         super().__init__()
@@ -300,6 +304,7 @@ class Unsqueeze(Transform):
     """Add a size-1 dimension at a given semantic position."""
 
     scope = Scope.GLOBAL
+    supports_partial_fit = True
 
     def __init__(self, dim: Dim, position: int = -1) -> None:
         super().__init__()

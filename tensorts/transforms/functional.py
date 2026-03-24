@@ -61,6 +61,7 @@ class FunctionTransform(Transform):
     """
 
     supports_ragged = True
+    supports_partial_fit = True  # stateless
 
     def __init__(
         self,

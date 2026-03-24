@@ -101,6 +101,15 @@ class SklearnWrapper(_BaseEstimator):
         self.estimator.fit(X_np, y)
         return self
 
+    def partial_fit(self, X: "TimeTensor", y=None, **kwargs) -> "SklearnWrapper":
+        y = self._labels(X, y)
+        Xt = self.pipeline.partial_fit_transform(X, y)
+        if Xt.y is not None:
+            y = Xt.y
+        X_np = Xt.data.reshape(Xt.n_samples, -1)
+        self.estimator.partial_fit(X_np, y, **kwargs)
+        return self
+
     def _aggregate_window_preds(self, preds: np.ndarray, Xt: "TimeTensor", n_original: int) -> np.ndarray:
         """Aggregate window-level predictions to sample level using mean.
 

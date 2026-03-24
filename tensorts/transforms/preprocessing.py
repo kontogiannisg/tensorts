@@ -14,6 +14,26 @@ from ..core.tensor import TimeTensor
 from .base import Scope, Transform
 
 # ======================================================================
+# Helpers
+# ======================================================================
+
+
+def _extract_per_channel(X: TimeTensor) -> np.ndarray:
+    """Flatten a TimeTensor to (N, C) for per-channel statistics."""
+    if X.is_ragged:
+        return np.concatenate(X._samples, axis=0)  # (T_total, C)
+    ch_dim = X._find_channel_dim(X.schema)
+    if ch_dim is not None:
+        ch_ax = X.axis(ch_dim)
+        n_ch = X.data.shape[ch_ax]
+        perm = list(range(X.data.ndim))
+        perm.remove(ch_ax)
+        perm.append(ch_ax)
+        return np.transpose(X.data, perm).reshape(-1, n_ch)
+    return X.data.ravel()[:, np.newaxis]
+
+
+# ======================================================================
 # StandardScaler
 # ======================================================================
 
@@ -28,27 +48,44 @@ class StandardScaler(Transform):
     scope = Scope.PER_CHANNEL
     supports_ragged = True
 
+    supports_partial_fit = True
+
     def __init__(self, eps: float = 1e-8) -> None:
         super().__init__()
         self.eps = eps
         self.mean_: np.ndarray | None = None
         self.std_: np.ndarray | None = None
+        self._var: np.ndarray | None = None
+        self.n_samples_seen_: int = 0
 
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "StandardScaler":
-        if X.is_ragged:
-            all_data = np.concatenate(X._samples, axis=0)  # (T_total, C)
-            self.mean_ = np.mean(all_data, axis=0, keepdims=True)  # (1, C)
-            self.std_ = np.std(all_data, axis=0, keepdims=True)  # (1, C)
+        flat = _extract_per_channel(X)  # (N, C)
+        self.mean_ = np.mean(flat, axis=0, keepdims=True)
+        self._var = np.var(flat, axis=0, keepdims=True)
+        self.std_ = np.sqrt(self._var)
+        self.n_samples_seen_ = flat.shape[0]
+        self._is_fitted = True
+        return self
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "StandardScaler":
+        flat = _extract_per_channel(X)  # (N, C)
+        batch_mean = np.mean(flat, axis=0, keepdims=True)
+        batch_var = np.var(flat, axis=0, keepdims=True)
+        batch_n = flat.shape[0]
+
+        if not self._is_fitted:
+            self.mean_ = batch_mean
+            self._var = batch_var
+            self.n_samples_seen_ = batch_n
         else:
-            ch_dim = X._find_channel_dim(X.schema)
-            if ch_dim is not None:
-                ch_ax = X.axis(ch_dim)
-                reduce_axes = tuple(i for i in range(X.data.ndim) if i != ch_ax)
-                self.mean_ = np.mean(X.data, axis=reduce_axes, keepdims=True)
-                self.std_ = np.std(X.data, axis=reduce_axes, keepdims=True)
-            else:
-                self.mean_ = np.mean(X.data, keepdims=True)
-                self.std_ = np.std(X.data, keepdims=True)
+            old_n = self.n_samples_seen_
+            new_n = old_n + batch_n
+            delta = batch_mean - self.mean_
+            self.mean_ = self.mean_ + delta * batch_n / new_n
+            self._var = (old_n * self._var + batch_n * batch_var + delta**2 * old_n * batch_n / new_n) / new_n
+            self.n_samples_seen_ = new_n
+
+        self.std_ = np.sqrt(self._var)
         self._is_fitted = True
         return self
 
@@ -79,6 +116,7 @@ class MinMaxScaler(Transform):
 
     scope = Scope.PER_CHANNEL
     supports_ragged = True
+    supports_partial_fit = True
 
     def __init__(self, feature_range: tuple[float, float] = (0.0, 1.0), eps: float = 1e-8) -> None:
         super().__init__()
@@ -88,19 +126,24 @@ class MinMaxScaler(Transform):
         self.max_: np.ndarray | None = None
 
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "MinMaxScaler":
-        if X.is_ragged:
-            all_data = np.concatenate(X._samples, axis=0)
-            self.min_ = np.min(all_data, axis=0, keepdims=True)
-            self.max_ = np.max(all_data, axis=0, keepdims=True)
+        flat = _extract_per_channel(X)
+        self.min_ = np.min(flat, axis=0, keepdims=True)
+        self.max_ = np.max(flat, axis=0, keepdims=True)
+        self._is_fitted = True
+        return self
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "MinMaxScaler":
+        flat = _extract_per_channel(X)
+        batch_min = np.min(flat, axis=0, keepdims=True)
+        batch_max = np.max(flat, axis=0, keepdims=True)
+
+        if not self._is_fitted:
+            self.min_ = batch_min
+            self.max_ = batch_max
         else:
-            ch_dim = X._find_channel_dim(X.schema)
-            if ch_dim is not None:
-                ch_ax = X.axis(ch_dim)
-                reduce_axes = tuple(i for i in range(X.data.ndim) if i != ch_ax)
-            else:
-                reduce_axes = None
-            self.min_ = np.min(X.data, axis=reduce_axes, keepdims=True)
-            self.max_ = np.max(X.data, axis=reduce_axes, keepdims=True)
+            self.min_ = np.minimum(self.min_, batch_min)
+            self.max_ = np.maximum(self.max_, batch_max)
+
         self._is_fitted = True
         return self
 
@@ -203,25 +246,36 @@ class Interpolate(Transform):
 
     scope = Scope.PER_CHANNEL
     supports_ragged = True
+    supports_partial_fit = True
 
     def __init__(self, method: str = "linear") -> None:
         super().__init__()
         self.method = method
         self.channel_means_: np.ndarray | None = None
+        self._mean_sum: np.ndarray | None = None
+        self._mean_count: np.ndarray | None = None
 
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "Interpolate":
-        # Store channel means for fallback when entire series is NaN
-        if X.is_ragged:
-            all_data = np.concatenate(X._samples, axis=0)
-            self.channel_means_ = np.nanmean(all_data, axis=0)
+        flat = _extract_per_channel(X)  # (N, C)
+        self.channel_means_ = np.nanmean(flat, axis=0)
+        self._mean_sum = np.nansum(flat, axis=0)
+        self._mean_count = np.sum(~np.isnan(flat), axis=0)
+        self._is_fitted = True
+        return self
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "Interpolate":
+        flat = _extract_per_channel(X)
+        batch_sum = np.nansum(flat, axis=0)
+        batch_count = np.sum(~np.isnan(flat), axis=0)
+
+        if not self._is_fitted:
+            self._mean_sum = batch_sum
+            self._mean_count = batch_count
         else:
-            ch_dim = X._find_channel_dim(X.schema)
-            if ch_dim is not None:
-                ch_ax = X.axis(ch_dim)
-                reduce_axes = tuple(i for i in range(X.data.ndim) if i != ch_ax)
-                self.channel_means_ = np.nanmean(X.data, axis=reduce_axes)
-            else:
-                self.channel_means_ = np.nanmean(X.data)
+            self._mean_sum = self._mean_sum + batch_sum
+            self._mean_count = self._mean_count + batch_count
+
+        self.channel_means_ = np.where(self._mean_count > 0, self._mean_sum / self._mean_count, 0.0)
         self._is_fitted = True
         return self
 
@@ -308,9 +362,12 @@ class LabelEncoder(Transform):
     Operates on ``TimeTensor.y`` rather than the data array.
     """
 
+    supports_partial_fit = True
+
     def __init__(self) -> None:
         super().__init__()
         self.classes_: np.ndarray | None = None
+        self._class_to_idx: dict | None = None
 
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "LabelEncoder":
         labels = y if y is not None else X.y
@@ -318,6 +375,24 @@ class LabelEncoder(Transform):
             raise ValueError("No labels to encode.")
         self.classes_ = np.unique(labels)
         self._class_to_idx = {c: i for i, c in enumerate(self.classes_)}
+        self._is_fitted = True
+        return self
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "LabelEncoder":
+        labels = y if y is not None else X.y
+        if labels is None:
+            raise ValueError("No labels to encode.")
+        new_classes = np.unique(labels)
+
+        if not self._is_fitted:
+            self.classes_ = new_classes
+            self._class_to_idx = {c: i for i, c in enumerate(self.classes_)}
+        else:
+            for c in new_classes:
+                if c not in self._class_to_idx:
+                    self._class_to_idx[c] = len(self.classes_)
+                    self.classes_ = np.append(self.classes_, c)
+
         self._is_fitted = True
         return self
 
@@ -343,6 +418,7 @@ class MaxAbsScaler(Transform):
 
     scope = Scope.PER_CHANNEL
     supports_ragged = True
+    supports_partial_fit = True
 
     def __init__(self, eps: float = 1e-8) -> None:
         super().__init__()
@@ -350,17 +426,20 @@ class MaxAbsScaler(Transform):
         self.max_abs_: np.ndarray | None = None
 
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "MaxAbsScaler":
-        if X.is_ragged:
-            all_data = np.concatenate(X._samples, axis=0)
-            self.max_abs_ = np.max(np.abs(all_data), axis=0, keepdims=True)
+        flat = _extract_per_channel(X)
+        self.max_abs_ = np.max(np.abs(flat), axis=0, keepdims=True)
+        self._is_fitted = True
+        return self
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "MaxAbsScaler":
+        flat = _extract_per_channel(X)
+        batch_max_abs = np.max(np.abs(flat), axis=0, keepdims=True)
+
+        if not self._is_fitted:
+            self.max_abs_ = batch_max_abs
         else:
-            ch_dim = X._find_channel_dim(X.schema)
-            if ch_dim is not None:
-                ch_ax = X.axis(ch_dim)
-                reduce_axes = tuple(i for i in range(X.data.ndim) if i != ch_ax)
-            else:
-                reduce_axes = None
-            self.max_abs_ = np.max(np.abs(X.data), axis=reduce_axes, keepdims=True)
+            self.max_abs_ = np.maximum(self.max_abs_, batch_max_abs)
+
         self._is_fitted = True
         return self
 
@@ -400,6 +479,7 @@ class Normalizer(Transform):
 
     scope = Scope.PER_SAMPLE
     supports_ragged = True
+    supports_partial_fit = True  # stateless — partial_fit is a no-op
 
     def __init__(self, norm: str = "l2", eps: float = 1e-8) -> None:
         super().__init__()
