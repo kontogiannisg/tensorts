@@ -48,7 +48,7 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/gkontogiannhs/tensorts"
+Repository = "https://github.com/kontogiannisg/tensorts"
 
 [tool.setuptools.packages.find]
 include = ["tensorts*"]

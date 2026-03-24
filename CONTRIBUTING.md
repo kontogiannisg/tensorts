@@ -5,7 +5,7 @@ Thanks for your interest in contributing! This guide covers everything you need 
 ## Setup
 
 ```bash
-git clone https://github.com/gkontogiannhs/tensorts.git
+git clone https://github.com/kontogiannisg/tensorts.git
 cd tensorts
 python -m venv .venv
 source .venv/bin/activate
