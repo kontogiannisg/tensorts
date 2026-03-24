@@ -26,6 +26,7 @@ class PreEmphasis(Transform):
 
     scope = Scope.ELEMENTWISE
     supports_ragged = True
+    supports_partial_fit = True
 
     def __init__(self, coeff: float = 0.97) -> None:
         super().__init__()
@@ -351,6 +352,7 @@ class LogTransform(Transform):
 
     scope = Scope.ELEMENTWISE
     supports_ragged = True
+    supports_partial_fit = True
 
     def __init__(self, eps: float = 1e-10, base: str = "natural") -> None:
         super().__init__()

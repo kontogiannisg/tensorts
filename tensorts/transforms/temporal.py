@@ -53,6 +53,7 @@ class SlidingWindow(Transform):
     """
 
     supports_ragged = True
+    supports_partial_fit = True
     scope = Scope.PER_SAMPLE
 
     def __init__(
@@ -232,6 +233,7 @@ class Pad(Transform):
     """
 
     supports_ragged = True
+    supports_partial_fit = True
     scope = Scope.PER_SAMPLE
 
     def __init__(
@@ -337,6 +339,7 @@ class Truncate(Transform):
     """Truncate sequences along the time axis to a target length."""
 
     supports_ragged = True
+    supports_partial_fit = True
     scope = Scope.PER_SAMPLE
 
     def __init__(self, target_length: int, side: str = "right") -> None:
@@ -381,6 +384,7 @@ class Resample(Transform):
     """
 
     supports_ragged = True
+    supports_partial_fit = True
     scope = Scope.PER_SAMPLE
 
     def __init__(self, target_length: int) -> None:

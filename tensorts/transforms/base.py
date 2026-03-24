@@ -58,6 +58,7 @@ class Transform(ABC):
     input_dims: tuple[Dim, ...] | None = None
     output_dims: tuple[Dim, ...] | None = None
     supports_ragged: bool = False
+    supports_partial_fit: bool = False
     scope: Scope = Scope.GLOBAL
 
     def __init__(self) -> None:
@@ -95,6 +96,19 @@ class Transform(ABC):
     def fit_transform(self, X: TimeTensor, y: np.ndarray | None = None) -> TimeTensor:
         """Fit and transform in one step."""
         return self.fit(X, y).transform(X)
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "Transform":
+        """Incremental fit on a batch of data.
+
+        Default falls back to ``fit()`` (full refit).  Subclasses that
+        support true incremental learning override this and set
+        ``supports_partial_fit = True``.
+        """
+        return self.fit(X, y)
+
+    def partial_fit_transform(self, X: TimeTensor, y: np.ndarray | None = None) -> TimeTensor:
+        """Incremental fit and transform in one step."""
+        return self.partial_fit(X, y).transform(X)
 
     def __repr__(self) -> str:
         params = ", ".join(f"{k}={v!r}" for k, v in self.get_params().items())
@@ -146,6 +160,7 @@ class Pipeline(Transform):
     """
 
     supports_ragged = True  # delegates to individual steps
+    supports_partial_fit = True  # delegates to individual steps
 
     def __init__(self, steps: list[tuple[str, Transform]]) -> None:
         super().__init__()
@@ -188,6 +203,26 @@ class Pipeline(Transform):
         Xt = X
         for name, step in self.steps:
             Xt = step.fit_transform(Xt, y)
+            if Xt.y is not None:
+                y = Xt.y
+        self._is_fitted = True
+        return Xt
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "Pipeline":
+        Xt = X
+        for name, step in self.steps[:-1]:
+            Xt = step.partial_fit_transform(Xt, y)
+            if Xt.y is not None:
+                y = Xt.y
+        last_name, last_step = self.steps[-1]
+        last_step.partial_fit(Xt, y)
+        self._is_fitted = True
+        return self
+
+    def partial_fit_transform(self, X: TimeTensor, y: np.ndarray | None = None) -> TimeTensor:
+        Xt = X
+        for name, step in self.steps:
+            Xt = step.partial_fit_transform(Xt, y)
             if Xt.y is not None:
                 y = Xt.y
         self._is_fitted = True
@@ -285,6 +320,8 @@ class ChannelTransform(Transform):
         remaining = sorted(all_indices - all_matched)
         self._remainder_indices = np.array(remaining) if remaining else None
 
+    supports_partial_fit = True  # delegates to inner transforms
+
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "ChannelTransform":
         self._resolve_groups(X)
         ch_axis = X.axis(Dim.CHANNEL) if not X.is_ragged else -1
@@ -292,6 +329,18 @@ class ChannelTransform(Transform):
         for key, indices, tfm in self._resolved:
             sub = self._select_channels(X, indices, ch_axis)
             tfm.fit(sub, y)
+
+        self._is_fitted = True
+        return self
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "ChannelTransform":
+        if self._resolved is None:
+            self._resolve_groups(X)
+        ch_axis = X.axis(Dim.CHANNEL) if not X.is_ragged else -1
+
+        for key, indices, tfm in self._resolved:
+            sub = self._select_channels(X, indices, ch_axis)
+            tfm.partial_fit(sub, y)
 
         self._is_fitted = True
         return self
@@ -393,11 +442,22 @@ class ChannelSelect(Transform):
         other = sorted(all_idx - set(self._selected_idx.tolist()))
         self._other_idx = np.array(other) if other else None
 
+    supports_partial_fit = True  # delegates to inner transform
+
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "ChannelSelect":
         self._resolve(X)
         ch_axis = X.axis(Dim.CHANNEL) if not X.is_ragged else -1
         sub = ChannelTransform._select_channels(X, self._selected_idx, ch_axis)
         self.inner.fit(sub, y)
+        self._is_fitted = True
+        return self
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "ChannelSelect":
+        if self._selected_idx is None:
+            self._resolve(X)
+        ch_axis = X.axis(Dim.CHANNEL) if not X.is_ragged else -1
+        sub = ChannelTransform._select_channels(X, self._selected_idx, ch_axis)
+        self.inner.partial_fit(sub, y)
         self._is_fitted = True
         return self
 
