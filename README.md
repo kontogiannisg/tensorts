@@ -1,5 +1,9 @@
 # tensorts
 
+[![Tests](https://github.com/gkontogiannhs/tensorts/actions/workflows/tests.yml/badge.svg)](https://github.com/gkontogiannhs/tensorts/actions/workflows/tests.yml)
+[![Ruff](https://github.com/gkontogiannhs/tensorts/actions/workflows/lint.yml/badge.svg)](https://github.com/gkontogiannhs/tensorts/actions/workflows/lint.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **A channel-aware, shape-flexible tensor pipeline for multivariate time series.**
 
 tensorts gives you a single container — `TimeTensor` — where every axis carries a semantic role (batch, time, channel, window, frequency, feature) and the channel axis carries named metadata. Transforms reason about *which axis to operate on by name*, never by integer index. The result is composable, domain-agnostic pipelines that work identically on `(B, T, C)` sensor data, `(B, FREQ, T', C)` spectrograms, and ragged lists of variable-length recordings.
