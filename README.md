@@ -39,6 +39,7 @@ python tests/test_tensorts.py                  # 62 tests
 python tests/test_feature_extractor.py         # 31 tests
 python tests/test_function_transform.py        # 21 tests
 python tests/test_sklearn_compat_problems.py   # 4 real-world problems
+python tests/test_partial_fit.py               # 15 incremental learning tests
 ```
 
 ---
@@ -497,6 +498,45 @@ print(gs.best_params_)
 
 ---
 
+## Incremental learning (`partial_fit`)
+
+All transforms support `partial_fit()` for streaming / online learning scenarios — data arriving in batches, datasets too large for memory, or distribution drift.
+
+```python
+from tensorts import Pipeline, StandardScaler, SlidingWindow, Flatten
+
+pipe = Pipeline([
+    ('scale',  StandardScaler()),
+    ('window', SlidingWindow(size=128, stride=64)),
+    ('flat',   Flatten()),
+])
+
+# Incremental updates — no need to refit from scratch
+for batch in data_stream:
+    pipe.partial_fit(batch)
+
+# Transform uses the accumulated statistics
+result = pipe.transform(new_data)
+```
+
+**Which transforms support true incremental updates?**
+
+| Transform | True incremental | Algorithm |
+|-----------|:---:|-----------|
+| `StandardScaler` | yes | Welford's online mean/variance |
+| `MinMaxScaler` | yes | Running min/max |
+| `MaxAbsScaler` | yes | Running max abs |
+| `LabelEncoder` | yes | Append-only class mapping |
+| `Interpolate` | yes | Running channel means |
+| Stateless transforms | yes | No state to update |
+| `RobustScaler`, `PowerTransformer`, `QuantileTransformer`, `PCA` | no | Falls back to `fit()` (full refit) |
+
+Check `transform.supports_partial_fit` at runtime to see if a transform does true incremental learning.
+
+`SklearnWrapper.partial_fit()` chains through the pipeline and delegates to the estimator's `partial_fit`, enabling end-to-end streaming with sklearn estimators like `SGDClassifier`.
+
+---
+
 ## End-to-end examples
 
 ### HAR (Human Activity Recognition) — ragged recordings
@@ -722,7 +762,7 @@ for train_fold, test_fold in kfold_temporal(ts, n_folds=5):
 | `Pipeline` | Sequential chain with named steps |
 | `ChannelTransform` | Different transforms per channel group |
 | `ChannelSelect` | Transform a subset; passthrough others |
-| `SklearnWrapper` | Bridge to sklearn CV tools |
+| `SklearnWrapper` | Bridge to sklearn CV tools (supports `partial_fit`) |
 
 ---
 

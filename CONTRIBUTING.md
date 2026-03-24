@@ -40,7 +40,7 @@ CI will fail if either reports errors. Run both before pushing.
 
 1. Choose the right file in `tensorts/transforms/` based on category (preprocessing, temporal, spectral, shape, functional).
 2. Subclass `Transform` and implement `fit()` and `transform()`. Add `inverse_transform()` if the operation is reversible.
-3. Set `supports_ragged = True` if your transform handles variable-length input.
+3. Set `supports_ragged = True` if your transform handles variable-length input. Set `supports_partial_fit = True` if it supports true incremental learning (override `partial_fit()` if needed).
 4. Export it in `tensorts/transforms/__init__.py` and `tensorts/__init__.py`.
 5. Add tests covering dense input, ragged input (if supported), and inverse round-trip (if applicable).
 6. Document it in `tensorts/transforms/README.md`.
