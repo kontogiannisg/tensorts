@@ -22,6 +22,22 @@ def _kurtosis_fn(x: np.ndarray) -> float:
     return float(np.mean(((x - m) / s) ** 4) - 3.0)
 
 
+def _rms_fn(x: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(x**2)))
+
+
+def _energy_fn(x: np.ndarray) -> float:
+    return float(np.sum(x**2))
+
+
+def _iqr_fn(x: np.ndarray) -> float:
+    return float(np.percentile(x, 75) - np.percentile(x, 25))
+
+
+def _zcr_fn(x: np.ndarray) -> float:
+    return float(np.mean(np.diff(np.signbit(x)).astype(np.float64)))
+
+
 _STAT_FN_MAP: dict = {
     "mean": np.mean,
     "std": np.std,
@@ -29,13 +45,13 @@ _STAT_FN_MAP: dict = {
     "min": np.min,
     "max": np.max,
     "median": np.median,
-    "rms": lambda x: float(np.sqrt(np.mean(x**2))),
+    "rms": _rms_fn,
     "range": np.ptp,
-    "energy": lambda x: float(np.sum(x**2)),
+    "energy": _energy_fn,
     "skew": _skew_fn,
     "kurtosis": _kurtosis_fn,
-    "iqr": lambda x: float(np.percentile(x, 75) - np.percentile(x, 25)),
-    "zcr": lambda x: float(np.mean(np.diff(np.signbit(x)).astype(np.float64))),
+    "iqr": _iqr_fn,
+    "zcr": _zcr_fn,
 }
 
 _VALID_STAT_FEATURES = frozenset(_STAT_FN_MAP.keys())
