@@ -7,18 +7,16 @@ Stateful transforms (scalers) learn parameters on ``fit()`` and apply on ``trans
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 
 from ..core.dims import Dim
 from ..core.tensor import TimeTensor
 from .base import Scope, Transform
 
-
 # ======================================================================
 # StandardScaler
 # ======================================================================
+
 
 class StandardScaler(Transform):
     """Zero-mean, unit-variance scaling.
@@ -39,8 +37,8 @@ class StandardScaler(Transform):
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "StandardScaler":
         if X.is_ragged:
             all_data = np.concatenate(X._samples, axis=0)  # (T_total, C)
-            self.mean_ = np.mean(all_data, axis=0, keepdims=True)   # (1, C)
-            self.std_ = np.std(all_data, axis=0, keepdims=True)     # (1, C)
+            self.mean_ = np.mean(all_data, axis=0, keepdims=True)  # (1, C)
+            self.std_ = np.std(all_data, axis=0, keepdims=True)  # (1, C)
         else:
             ch_dim = X._find_channel_dim(X.schema)
             if ch_dim is not None:
@@ -57,9 +55,7 @@ class StandardScaler(Transform):
     def transform(self, X: TimeTensor) -> TimeTensor:
         self._check_fitted()
         if X.is_ragged:
-            new_samples = [
-                (s - self.mean_) / (self.std_ + self.eps) for s in X._samples
-            ]
+            new_samples = [(s - self.mean_) / (self.std_ + self.eps) for s in X._samples]
             return X.with_ragged(new_samples)
         new_data = (X.data - self.mean_) / (self.std_ + self.eps)
         return X.with_data(new_data)
@@ -67,9 +63,7 @@ class StandardScaler(Transform):
     def inverse_transform(self, X: TimeTensor) -> TimeTensor:
         self._check_fitted()
         if X.is_ragged:
-            new_samples = [
-                s * (self.std_ + self.eps) + self.mean_ for s in X._samples
-            ]
+            new_samples = [s * (self.std_ + self.eps) + self.mean_ for s in X._samples]
             return X.with_ragged(new_samples)
         new_data = X.data * (self.std_ + self.eps) + self.mean_
         return X.with_data(new_data)
@@ -78,6 +72,7 @@ class StandardScaler(Transform):
 # ======================================================================
 # MinMaxScaler
 # ======================================================================
+
 
 class MinMaxScaler(Transform):
     """Scale to [feature_range[0], feature_range[1]] per channel."""
@@ -135,6 +130,7 @@ class MinMaxScaler(Transform):
 # RobustScaler
 # ======================================================================
 
+
 class RobustScaler(Transform):
     """Scale using median and IQR (robust to outliers)."""
 
@@ -177,9 +173,7 @@ class RobustScaler(Transform):
     def transform(self, X: TimeTensor) -> TimeTensor:
         self._check_fitted()
         if X.is_ragged:
-            new_samples = [
-                (s - self.median_) / (self.iqr_ + self.eps) for s in X._samples
-            ]
+            new_samples = [(s - self.median_) / (self.iqr_ + self.eps) for s in X._samples]
             return X.with_ragged(new_samples)
         new_data = (X.data - self.median_) / (self.iqr_ + self.eps)
         return X.with_data(new_data)
@@ -187,9 +181,7 @@ class RobustScaler(Transform):
     def inverse_transform(self, X: TimeTensor) -> TimeTensor:
         self._check_fitted()
         if X.is_ragged:
-            new_samples = [
-                s * (self.iqr_ + self.eps) + self.median_ for s in X._samples
-            ]
+            new_samples = [s * (self.iqr_ + self.eps) + self.median_ for s in X._samples]
             return X.with_ragged(new_samples)
         new_data = X.data * (self.iqr_ + self.eps) + self.median_
         return X.with_data(new_data)
@@ -198,6 +190,7 @@ class RobustScaler(Transform):
 # ======================================================================
 # Interpolate (imputation)
 # ======================================================================
+
 
 class Interpolate(Transform):
     """Fill NaN values via interpolation along the time axis.
@@ -250,11 +243,10 @@ class Interpolate(Transform):
             valid_vals = col[valid]
 
             if self.method == "linear":
-                result[nans, c] = np.interp(
-                    np.where(nans)[0], valid_idx, valid_vals
-                )
+                result[nans, c] = np.interp(np.where(nans)[0], valid_idx, valid_vals)
             elif self.method == "nearest":
                 from scipy.interpolate import interp1d
+
                 f = interp1d(valid_idx, valid_vals, kind="nearest", fill_value="extrapolate")
                 result[nans, c] = f(np.where(nans)[0])
             elif self.method == "zero":
@@ -309,6 +301,7 @@ class Interpolate(Transform):
 # LabelEncoder
 # ======================================================================
 
+
 class LabelEncoder(Transform):
     """Encode string or arbitrary labels to integer class indices.
 
@@ -333,13 +326,14 @@ class LabelEncoder(Transform):
         labels = X.y
         if labels is None:
             return X
-        encoded = np.array([self._class_to_idx[l] for l in labels])
+        encoded = np.array([self._class_to_idx[label] for label in labels])
         return X.with_y(encoded)
 
 
 # ======================================================================
 # MaxAbsScaler
 # ======================================================================
+
 
 class MaxAbsScaler(Transform):
     """Scale each channel by its maximum absolute value.
@@ -389,6 +383,7 @@ class MaxAbsScaler(Transform):
 # Normalizer
 # ======================================================================
 
+
 class Normalizer(Transform):
     """Per-sample normalization (L1, L2, or max norm).
 
@@ -417,7 +412,7 @@ class Normalizer(Transform):
 
     def _compute_norm(self, arr: np.ndarray) -> float:
         if self.norm == "l2":
-            return float(np.sqrt(np.sum(arr ** 2)))
+            return float(np.sqrt(np.sum(arr**2)))
         elif self.norm == "l1":
             return float(np.sum(np.abs(arr)))
         elif self.norm == "max":
@@ -426,9 +421,7 @@ class Normalizer(Transform):
 
     def transform(self, X: TimeTensor) -> TimeTensor:
         if X.is_ragged:
-            new_samples = [
-                s / (self._compute_norm(s) + self.eps) for s in X._samples
-            ]
+            new_samples = [s / (self._compute_norm(s) + self.eps) for s in X._samples]
             return X.with_ragged(new_samples)
 
         data = X.data
@@ -440,7 +433,7 @@ class Normalizer(Transform):
         flat = transposed.reshape(B, -1)
 
         if self.norm == "l2":
-            norms = np.sqrt(np.sum(flat ** 2, axis=1, keepdims=True))
+            norms = np.sqrt(np.sum(flat**2, axis=1, keepdims=True))
         elif self.norm == "l1":
             norms = np.sum(np.abs(flat), axis=1, keepdims=True)
         elif self.norm == "max":
@@ -459,6 +452,7 @@ class Normalizer(Transform):
 # ======================================================================
 # PowerTransformer (Yeo-Johnson)
 # ======================================================================
+
 
 class PowerTransformer(Transform):
     """Yeo-Johnson power transform to make data more Gaussian.
@@ -572,9 +566,7 @@ class PowerTransformer(Transform):
         self.lambdas_ = np.array([self._find_lambda(all_data[:, c]) for c in range(C)])
 
         if self.standardize:
-            transformed = np.column_stack(
-                [self._yeo_johnson(all_data[:, c], self.lambdas_[c]) for c in range(C)]
-            )
+            transformed = np.column_stack([self._yeo_johnson(all_data[:, c], self.lambdas_[c]) for c in range(C)])
             self.mean_ = np.mean(transformed, axis=0, keepdims=True)
             self.std_ = np.std(transformed, axis=0, keepdims=True)
 
@@ -584,9 +576,7 @@ class PowerTransformer(Transform):
     def _transform_array(self, arr: np.ndarray) -> np.ndarray:
         C = arr.shape[-1]
         flat = arr.reshape(-1, C).astype(np.float64)
-        out = np.column_stack(
-            [self._yeo_johnson(flat[:, c], self.lambdas_[c]) for c in range(C)]
-        )
+        out = np.column_stack([self._yeo_johnson(flat[:, c], self.lambdas_[c]) for c in range(C)])
         if self.standardize:
             out = (out - self.mean_) / (self.std_ + self.eps)
         return out.reshape(arr.shape)
@@ -603,9 +593,7 @@ class PowerTransformer(Transform):
         flat = arr.reshape(-1, C).astype(np.float64)
         if self.standardize:
             flat = flat * (self.std_ + self.eps) + self.mean_
-        out = np.column_stack(
-            [self._yeo_johnson_inverse(flat[:, c], self.lambdas_[c]) for c in range(C)]
-        )
+        out = np.column_stack([self._yeo_johnson_inverse(flat[:, c], self.lambdas_[c]) for c in range(C)])
         return out.reshape(arr.shape)
 
     def inverse_transform(self, X: TimeTensor) -> TimeTensor:
@@ -619,6 +607,7 @@ class PowerTransformer(Transform):
 # ======================================================================
 # QuantileTransformer
 # ======================================================================
+
 
 class QuantileTransformer(Transform):
     """Map each channel's empirical distribution to uniform or normal.
@@ -674,9 +663,7 @@ class QuantileTransformer(Transform):
         n_samples = all_data.shape[0]
         n_q = min(self.n_quantiles, n_samples)
         self.references_ = np.linspace(0, 1, n_q)
-        self.quantiles_ = np.percentile(
-            all_data, self.references_ * 100, axis=0
-        )  # (n_q, C)
+        self.quantiles_ = np.percentile(all_data, self.references_ * 100, axis=0)  # (n_q, C)
 
         self._is_fitted = True
         return self
@@ -689,6 +676,7 @@ class QuantileTransformer(Transform):
         result = np.clip(result, 0, 1)
         if self.output_distribution == "normal":
             from scipy.stats import norm
+
             result = np.clip(result, self.eps, 1 - self.eps)
             result = norm.ppf(result)
         return result
@@ -698,6 +686,7 @@ class QuantileTransformer(Transform):
         ref_vals = self.quantiles_[:, ch]
         if self.output_distribution == "normal":
             from scipy.stats import norm
+
             col = norm.cdf(col)
         return np.interp(col, self.references_, ref_vals)
 
@@ -710,23 +699,13 @@ class QuantileTransformer(Transform):
     def transform(self, X: TimeTensor) -> TimeTensor:
         self._check_fitted()
         if X.is_ragged:
-            new_samples = [
-                self._apply_per_channel(s, self._transform_channel)
-                for s in X._samples
-            ]
+            new_samples = [self._apply_per_channel(s, self._transform_channel) for s in X._samples]
             return X.with_ragged(new_samples)
-        return X.with_data(
-            self._apply_per_channel(X.data, self._transform_channel)
-        )
+        return X.with_data(self._apply_per_channel(X.data, self._transform_channel))
 
     def inverse_transform(self, X: TimeTensor) -> TimeTensor:
         self._check_fitted()
         if X.is_ragged:
-            new_samples = [
-                self._apply_per_channel(s, self._inverse_channel)
-                for s in X._samples
-            ]
+            new_samples = [self._apply_per_channel(s, self._inverse_channel) for s in X._samples]
             return X.with_ragged(new_samples)
-        return X.with_data(
-            self._apply_per_channel(X.data, self._inverse_channel)
-        )
+        return X.with_data(self._apply_per_channel(X.data, self._inverse_channel))

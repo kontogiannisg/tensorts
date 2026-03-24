@@ -16,10 +16,10 @@ from ..core.dims import Dim
 from ..core.tensor import TimeTensor
 from .base import Scope, Transform
 
-
 # ======================================================================
 # Flatten
 # ======================================================================
+
 
 class Flatten(Transform):
     """Flatten specified dims into a single FEATURE axis.
@@ -114,6 +114,7 @@ class Flatten(Transform):
 # Reshape
 # ======================================================================
 
+
 class Reshape(Transform):
     """Reshape the tensor to a new dim schema.
 
@@ -149,6 +150,7 @@ class Reshape(Transform):
 # Transpose
 # ======================================================================
 
+
 class Transpose(Transform):
     """Reorder the axes of a TimeTensor by semantic dim names.
 
@@ -177,6 +179,7 @@ class Transpose(Transform):
 # ======================================================================
 # PCA
 # ======================================================================
+
 
 class PCA(Transform):
     """Principal Component Analysis — reduces the CHANNEL/FEATURE axis.
@@ -270,6 +273,7 @@ class PCA(Transform):
 # Squeeze / Unsqueeze
 # ======================================================================
 
+
 class Squeeze(Transform):
     """Remove a size-1 dimension by semantic name."""
 
@@ -286,9 +290,7 @@ class Squeeze(Transform):
     def transform(self, X: TimeTensor) -> TimeTensor:
         ax = X.axis(self.dim)
         if X.data.shape[ax] != 1:
-            raise ValueError(
-                f"Cannot squeeze {self.dim}: size is {X.data.shape[ax]}, not 1."
-            )
+            raise ValueError(f"Cannot squeeze {self.dim}: size is {X.data.shape[ax]}, not 1.")
         new_data = np.squeeze(X.data, axis=ax)
         new_dims = X.schema.remove(self.dim)
         return X.with_data(new_data, dims=new_dims.dims)

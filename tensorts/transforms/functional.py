@@ -26,15 +26,14 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ..core.channels import ChannelIndex
-from ..core.dims import Dim, DimSchema
+from ..core.dims import Dim
 from ..core.tensor import TimeTensor
 from .base import Scope, Transform
-
 
 # ======================================================================
 # FunctionTransform — shape-preserving signal processing wrapper
 # ======================================================================
+
 
 class FunctionTransform(Transform):
     """Wrap a stateless function as a pipeline Transform.
@@ -122,7 +121,7 @@ class FunctionTransform(Transform):
         out[0, :, 0] = probe.ravel()[:T_out]
         for n in range(N):
             for c in range(C):
-                if n == 0 and c == 0: # Already computed to extract T dimension
+                if n == 0 and c == 0:  # Already computed to extract T dimension
                     continue
                 result = self._call_fn(flat[n, :, c])
                 out[n, :, c] = np.asarray(result).ravel()[:T_out]
@@ -172,8 +171,11 @@ class FunctionTransform(Transform):
         if len(shapes) == 1:
             stacked = np.stack(results, axis=0)
             return TimeTensor(
-                data=stacked, dims=X.dims, channels=X.channels,
-                y=X.y, metadata=X.metadata,
+                data=stacked,
+                dims=X.dims,
+                channels=X.channels,
+                y=X.y,
+                metadata=X.metadata,
             )
         return X.with_ragged(results)
 
@@ -181,7 +183,7 @@ class FunctionTransform(Transform):
 
     def _apply_global(self, X: TimeTensor) -> TimeTensor:
         if X.is_ragged:
-            raise ValueError(f"GLOBAL scope does not support ragged input.")
+            raise ValueError("GLOBAL scope does not support ragged input.")
         return X.with_data(self._call_fn(X.data))
 
     def __repr__(self) -> str:
@@ -191,6 +193,7 @@ class FunctionTransform(Transform):
 # ======================================================================
 # StatefulFunctionTransform
 # ======================================================================
+
 
 class StatefulFunctionTransform(Transform):
     """Wrap a stateful function pair (fit_fn, transform_fn) as a Transform.
@@ -204,8 +207,9 @@ class StatefulFunctionTransform(Transform):
 
     supports_ragged = True
 
-    def __init__(self, fit_fn, transform_fn, scope=Scope.PER_CHANNEL,
-                 fit_scope=None, fn_args=(), fn_kwargs=None, name=None):
+    def __init__(
+        self, fit_fn, transform_fn, scope=Scope.PER_CHANNEL, fit_scope=None, fn_args=(), fn_kwargs=None, name=None
+    ):
         super().__init__()
         self.fit_fn = fit_fn
         self.transform_fn = transform_fn
@@ -317,8 +321,9 @@ class StatefulFunctionTransform(Transform):
             results = [self._call_transform(s, state) for s in X._samples]
             shapes = set(r.shape for r in results)
             if len(shapes) == 1:
-                return TimeTensor(data=np.stack(results, axis=0), dims=X.dims,
-                                  channels=X.channels, y=X.y, metadata=X.metadata)
+                return TimeTensor(
+                    data=np.stack(results, axis=0), dims=X.dims, channels=X.channels, y=X.y, metadata=X.metadata
+                )
             return X.with_ragged(results)
 
         data = X.data
@@ -342,6 +347,7 @@ class StatefulFunctionTransform(Transform):
 # ======================================================================
 # FeatureExtractor — dimensionality-changing extraction, single or multi-fn
 # ======================================================================
+
 
 class FeatureExtractor(Transform):
     """Extract features per channel, with single-function or multi-function support.
@@ -490,13 +496,9 @@ class FeatureExtractor(Transform):
         """Validate parameters and derive internal state from public attrs."""
         fn, functions = self.fn, self.functions
         if fn is not None and functions is not None:
-            raise ValueError(
-                "Provide either 'fn' (single-fn mode) or 'functions' (multi-fn mode), not both."
-            )
+            raise ValueError("Provide either 'fn' (single-fn mode) or 'functions' (multi-fn mode), not both.")
         if fn is None and functions is None:
-            raise ValueError(
-                "Provide either 'fn' (single-fn mode) or 'functions' (multi-fn mode)."
-            )
+            raise ValueError("Provide either 'fn' (single-fn mode) or 'functions' (multi-fn mode).")
         if functions is not None:
             if len(functions) == 0:
                 raise ValueError("'functions' must not be empty.")
@@ -508,9 +510,7 @@ class FeatureExtractor(Transform):
                     "In multi-fn mode the output axis is always Dim.FEATURE."
                 )
             if self.scope == Scope.PER_SAMPLE:
-                raise NotImplementedError(
-                    "Scope.PER_SAMPLE is not yet supported in multi-fn mode."
-                )
+                raise NotImplementedError("Scope.PER_SAMPLE is not yet supported in multi-fn mode.")
             # Normalise to 3-tuples (name, fn, kwargs)
             normalised = []
             for entry in functions:
@@ -519,9 +519,7 @@ class FeatureExtractor(Transform):
                 elif len(entry) == 3:
                     normalised.append((entry[0], entry[1], entry[2] or {}))
                 else:
-                    raise ValueError(
-                        f"Each entry in 'functions' must be a 2- or 3-tuple, got length {len(entry)}."
-                    )
+                    raise ValueError(f"Each entry in 'functions' must be a 2- or 3-tuple, got length {len(entry)}.")
             self._functions_normalized: list[tuple[str, Callable, dict]] = normalised
             self._mode = "multi"
         else:
@@ -630,8 +628,11 @@ class FeatureExtractor(Transform):
             stacked = np.stack(new_samples, axis=0)
             new_dims = (Dim.BATCH, ch_d)
             return TimeTensor(
-                data=stacked, dims=new_dims, channels=X.channels,
-                y=X.y, metadata=X.metadata,
+                data=stacked,
+                dims=new_dims,
+                channels=X.channels,
+                y=X.y,
+                metadata=X.metadata,
             )
 
         shapes = set(s.shape for s in new_samples)
@@ -639,8 +640,11 @@ class FeatureExtractor(Transform):
         if len(shapes) == 1:
             stacked = np.stack(new_samples, axis=0)
             return TimeTensor(
-                data=stacked, dims=new_dims, channels=X.channels,
-                y=X.y, metadata=X.metadata,
+                data=stacked,
+                dims=new_dims,
+                channels=X.channels,
+                y=X.y,
+                metadata=X.metadata,
             )
         return X.with_ragged(new_samples, dims=new_dims, channels=X.channels)
 
@@ -712,7 +716,6 @@ class FeatureExtractor(Transform):
 
         # Use first sample to probe output sizes and build feature names
         first = X._samples[0]
-        C = first.shape[-1]
 
         fn_sizes: list[int] = []
         feature_names: list[str] = []  # one name per feature (K_total total)
@@ -728,7 +731,6 @@ class FeatureExtractor(Transform):
             for k in range(K_i):
                 feature_names.append(fname if K_i == 1 else f"{fname}__{k}")
 
-        K_total = sum(fn_sizes)
         new_samples = []
         for sample in X._samples:
             C_s = sample.shape[-1]
@@ -747,8 +749,11 @@ class FeatureExtractor(Transform):
         # Channels along CHANNEL axis stay the same as input
         meta = {**X.metadata, "_feature_names": feature_names}
         return TimeTensor(
-            data=stacked, dims=new_dims, channels=X.channels,
-            y=X.y, metadata=meta,
+            data=stacked,
+            dims=new_dims,
+            channels=X.channels,
+            y=X.y,
+            metadata=meta,
         )
 
     # ------------------------------------------------------------------

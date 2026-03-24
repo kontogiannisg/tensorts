@@ -23,8 +23,8 @@ from .preprocessing import (
     StandardScaler,
 )
 from .shape import (
-    Flatten,
     PCA,
+    Flatten,
     Reshape,
     Squeeze,
     Transpose,
@@ -47,19 +47,44 @@ from .temporal import (
 
 __all__ = [
     # Base
-    "Transform", "Pipeline", "ChannelTransform", "ChannelSelect", "Scope",
+    "Transform",
+    "Pipeline",
+    "ChannelTransform",
+    "ChannelSelect",
+    "Scope",
     # Functional
-    "FunctionTransform", "StatefulFunctionTransform", "FeatureExtractor",
+    "FunctionTransform",
+    "StatefulFunctionTransform",
+    "FeatureExtractor",
     # Features
     "make_statistical_extractor",
     # Preprocessing
-    "StandardScaler", "MinMaxScaler", "RobustScaler", "MaxAbsScaler",
-    "Normalizer", "PowerTransformer", "QuantileTransformer",
-    "Interpolate", "LabelEncoder",
+    "StandardScaler",
+    "MinMaxScaler",
+    "RobustScaler",
+    "MaxAbsScaler",
+    "Normalizer",
+    "PowerTransformer",
+    "QuantileTransformer",
+    "Interpolate",
+    "LabelEncoder",
     # Temporal
-    "SlidingWindow", "Pad", "Truncate", "Resample",
+    "SlidingWindow",
+    "Pad",
+    "Truncate",
+    "Resample",
     # Spectral
-    "PreEmphasis", "ButterworthFilter", "BandpassFilter", "STFT", "MelSpectrogram", "LogTransform",
+    "PreEmphasis",
+    "ButterworthFilter",
+    "BandpassFilter",
+    "STFT",
+    "MelSpectrogram",
+    "LogTransform",
     # Shape
-    "Flatten", "Reshape", "Transpose", "PCA", "Squeeze", "Unsqueeze",
+    "Flatten",
+    "Reshape",
+    "Transpose",
+    "PCA",
+    "Squeeze",
+    "Unsqueeze",
 ]

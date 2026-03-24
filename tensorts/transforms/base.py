@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum, auto
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -18,22 +18,24 @@ from ..core.channels import ChannelIndex
 from ..core.dims import Dim, DimSchema
 from ..core.tensor import TimeTensor
 
-
 # ======================================================================
 # Scope enum
 # ======================================================================
 
+
 class Scope(Enum):
     """Declares how a transform relates to the tensor axes."""
-    GLOBAL = auto()       # Needs all axes together (e.g., PCA)
+
+    GLOBAL = auto()  # Needs all axes together (e.g., PCA)
     PER_CHANNEL = auto()  # Independent per channel, vectorized over batch+time
-    PER_SAMPLE = auto()   # Independent per sample, vectorized over channels
+    PER_SAMPLE = auto()  # Independent per sample, vectorized over channels
     ELEMENTWISE = auto()  # Independent per element
 
 
 # ======================================================================
 # Base Transform
 # ======================================================================
+
 
 class Transform(ABC):
     """Base class for all transforms.
@@ -67,22 +69,16 @@ class Transform(ABC):
 
     def _check_fitted(self) -> None:
         if not self._is_fitted:
-            raise RuntimeError(
-                f"{self.__class__.__name__} has not been fitted. Call fit() first."
-            )
+            raise RuntimeError(f"{self.__class__.__name__} has not been fitted. Call fit() first.")
 
     def _validate_input(self, X: TimeTensor) -> None:
         if self.input_dims is not None and not X.is_ragged:
             expected = DimSchema(self.input_dims)
             if X.schema != expected:
-                raise ValueError(
-                    f"{self.__class__.__name__} expects dims {expected}, "
-                    f"got {X.schema}."
-                )
+                raise ValueError(f"{self.__class__.__name__} expects dims {expected}, got {X.schema}.")
         if X.is_ragged and not self.supports_ragged:
             raise ValueError(
-                f"{self.__class__.__name__} does not support ragged input. "
-                "Apply windowing or padding first."
+                f"{self.__class__.__name__} does not support ragged input. Apply windowing or padding first."
             )
 
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "Transform":
@@ -101,15 +97,13 @@ class Transform(ABC):
         return self.fit(X, y).transform(X)
 
     def __repr__(self) -> str:
-        params = ", ".join(
-            f"{k}={v!r}"
-            for k, v in self.get_params().items()
-        )
+        params = ", ".join(f"{k}={v!r}" for k, v in self.get_params().items())
         return f"{self.__class__.__name__}({params})"
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         """Return constructor parameters (sklearn-compatible)."""
         import inspect
+
         sig = inspect.signature(self.__class__.__init__)
         params = {}
         for name, param in sig.parameters.items():
@@ -138,6 +132,7 @@ class Transform(ABC):
 # Pipeline
 # ======================================================================
 
+
 class Pipeline(Transform):
     """Sequential composition of named transforms.
 
@@ -164,9 +159,7 @@ class Pipeline(Transform):
             if not isinstance(name, str):
                 raise TypeError(f"Step name must be str, got {type(name)}.")
             if not isinstance(transform, Transform):
-                raise TypeError(
-                    f"Step '{name}' is not a Transform: {type(transform)}."
-                )
+                raise TypeError(f"Step '{name}' is not a Transform: {type(transform)}.")
             if name in names:
                 raise ValueError(f"Duplicate step name: {name!r}.")
             names.add(name)
@@ -233,8 +226,7 @@ class Pipeline(Transform):
                 self.steps = value
             else:
                 raise ValueError(
-                    f"Invalid parameter {key!r} for Pipeline. "
-                    "Use 'steps' or 'step_name__param_name' format."
+                    f"Invalid parameter {key!r} for Pipeline. Use 'steps' or 'step_name__param_name' format."
                 )
         return self
 
@@ -242,6 +234,7 @@ class Pipeline(Transform):
 # ======================================================================
 # ChannelTransform
 # ======================================================================
+
 
 class ChannelTransform(Transform):
     """Apply different transforms to different channel groups.
@@ -327,9 +320,7 @@ class ChannelTransform(Transform):
         return self._concat_channels(parts, X, channel_names)
 
     @staticmethod
-    def _select_channels(
-        X: TimeTensor, indices: np.ndarray, ch_axis: int
-    ) -> TimeTensor:
+    def _select_channels(X: TimeTensor, indices: np.ndarray, ch_axis: int) -> TimeTensor:
         if X.is_ragged:
             new_samples = [s[..., indices] for s in X._samples]
             return X.with_ragged(
@@ -350,10 +341,7 @@ class ChannelTransform(Transform):
     ) -> TimeTensor:
         if parts[0].is_ragged:
             n_samples = len(parts[0]._samples)
-            merged = [
-                np.concatenate([p._samples[i] for p in parts], axis=-1)
-                for i in range(n_samples)
-            ]
+            merged = [np.concatenate([p._samples[i] for p in parts], axis=-1) for i in range(n_samples)]
             return original.with_ragged(
                 merged,
                 channels=ChannelIndex(channel_names) if channel_names else None,
@@ -369,6 +357,7 @@ class ChannelTransform(Transform):
 # ======================================================================
 # ChannelSelect
 # ======================================================================
+
 
 class ChannelSelect(Transform):
     """Apply a transform to selected channels; others pass through unchanged.
@@ -395,7 +384,9 @@ class ChannelSelect(Transform):
         if ci is None:
             raise RuntimeError("ChannelSelect requires named channels.")
         try:
-            self._selected_idx = ci.group(self.channel_key) if isinstance(self.channel_key, str) else ci.resolve(self.channel_key)
+            self._selected_idx = (
+                ci.group(self.channel_key) if isinstance(self.channel_key, str) else ci.resolve(self.channel_key)
+            )
         except KeyError:
             self._selected_idx = ci.resolve(self.channel_key)
         all_idx = set(range(len(ci)))
@@ -448,7 +439,7 @@ class ChannelSelect(Transform):
             elif key == "transform":
                 self.inner = value
             elif key.startswith("transform__"):
-                self.inner.set_params(**{key[len("transform__"):]: value})
+                self.inner.set_params(**{key[len("transform__") :]: value})
             else:
                 raise ValueError(f"Invalid parameter {key!r} for ChannelSelect.")
         return self

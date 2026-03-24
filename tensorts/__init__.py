@@ -29,10 +29,16 @@ Utilities:
 __version__ = "0.1.0"
 
 # Core
+# Sklearn integration
+from .compat import SklearnWrapper
 from .core import ChannelIndex, Dim, DimSchema, TimeTensor
+
+# IO
+from .io import from_csv, from_dataframe, from_numpy, to_dataframe, to_numpy, to_sklearn
 
 # Transforms (public API)
 from .transforms import (
+    PCA,
     STFT,
     BandpassFilter,
     ButterworthFilter,
@@ -44,12 +50,11 @@ from .transforms import (
     Interpolate,
     LabelEncoder,
     LogTransform,
-    MelSpectrogram,
     MaxAbsScaler,
+    MelSpectrogram,
     MinMaxScaler,
     Normalizer,
     Pad,
-    PCA,
     Pipeline,
     PowerTransformer,
     PreEmphasis,
@@ -68,12 +73,6 @@ from .transforms import (
     Unsqueeze,
     make_statistical_extractor,
 )
-
-# Sklearn integration
-from .compat import SklearnWrapper
-
-# IO
-from .io import from_csv, from_dataframe, from_numpy, to_dataframe, to_numpy, to_sklearn
 
 # Utilities
 from .utils import kfold_temporal, stratified_temporal_split, temporal_split

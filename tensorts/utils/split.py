@@ -40,9 +40,7 @@ def temporal_split(
     n_train = n - n_test - n_val
 
     if n_train <= 0:
-        raise ValueError(
-            f"Not enough samples ({n}) for the requested split ratios."
-        )
+        raise ValueError(f"Not enough samples ({n}) for the requested split ratios.")
 
     indices = np.arange(n)
     train_idx = indices[:n_train]
@@ -91,10 +89,7 @@ def stratified_temporal_split(
         n_train = n_cls - n_test - n_val
 
         if n_train <= 0:
-            raise ValueError(
-                f"Not enough samples for class {cls} ({n_cls} samples) "
-                f"with the requested split ratios."
-            )
+            raise ValueError(f"Not enough samples for class {cls} ({n_cls} samples) with the requested split ratios.")
 
         train_indices.extend(cls_indices[:n_train])
         if n_val > 0:

@@ -8,19 +8,16 @@ propagation.
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 
-from ..core.channels import ChannelIndex
 from ..core.dims import Dim
 from ..core.tensor import TimeTensor
 from .base import Scope, Transform
 
-
 # ======================================================================
 # SlidingWindow
 # ======================================================================
+
 
 class SlidingWindow(Transform):
     """Extract fixed-size windows from the time axis.
@@ -123,9 +120,7 @@ class SlidingWindow(Transform):
                     all_labels.extend([-1] * (K_i - 1) + [label] if K_i > 0 else [])
 
         if not all_windows or all(w.shape[0] == 0 for w in all_windows):
-            raise ValueError(
-                f"No windows produced. All samples shorter than window size {self.size}."
-            )
+            raise ValueError(f"No windows produced. All samples shorter than window size {self.size}.")
 
         if self.flatten_batch:
             stacked = np.concatenate(all_windows, axis=0)  # (B_total, W, C)
@@ -219,6 +214,7 @@ class SlidingWindow(Transform):
 # ======================================================================
 # Pad
 # ======================================================================
+
 
 class Pad(Transform):
     """Pad sequences along the time axis to a target length.
@@ -336,6 +332,7 @@ class Pad(Transform):
 # Truncate
 # ======================================================================
 
+
 class Truncate(Transform):
     """Truncate sequences along the time axis to a target length."""
 
@@ -372,6 +369,7 @@ class Truncate(Transform):
 # ======================================================================
 # Resample
 # ======================================================================
+
 
 class Resample(Transform):
     """Resample the time axis to a new number of samples (via linear interpolation).

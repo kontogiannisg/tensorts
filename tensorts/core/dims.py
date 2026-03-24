@@ -17,10 +17,10 @@ class Dim(Enum):
     BATCH = auto()
     TIME = auto()
     CHANNEL = auto()
-    WINDOW = auto()      # from SlidingWindow: number of windows (K)
-    FRAME = WINDOW       # alias for WINDOW in audio context (same underlying value)
-    FREQUENCY = auto()   # from FFT/STFT/Mel
-    FEATURE = auto()     # from feature extraction (flattened)
+    WINDOW = auto()  # from SlidingWindow: number of windows (K)
+    FRAME = WINDOW  # alias for WINDOW in audio context (same underlying value)
+    FREQUENCY = auto()  # from FFT/STFT/Mel
+    FEATURE = auto()  # from feature extraction (flattened)
 
     @classmethod
     def register(cls, name: str) -> "Dim":
@@ -63,19 +63,13 @@ class DimSchema:
         seen: set[Dim] = set()
         for d in dims:
             if d in seen:
-                raise ValueError(
-                    f"Duplicate dimension role {d!r}. "
-                    "Each semantic role may appear at most once."
-                )
+                raise ValueError(f"Duplicate dimension role {d!r}. Each semantic role may appear at most once.")
             seen.add(d)
 
     def axis(self, dim: Dim) -> int:
         """Resolve a semantic Dim to its integer axis index."""
         if dim not in self._index:
-            raise KeyError(
-                f"{dim!r} not present in schema {self._dims}. "
-                f"Available: {list(self._index.keys())}"
-            )
+            raise KeyError(f"{dim!r} not present in schema {self._dims}. Available: {list(self._index.keys())}")
         return self._index[dim]
 
     def has(self, dim: Dim) -> bool:

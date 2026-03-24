@@ -30,8 +30,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from .transforms.base import Pipeline
     from .core.tensor import TimeTensor
+    from .transforms.base import Pipeline
 
 try:
     from sklearn.base import BaseEstimator as _BaseEstimator
@@ -101,9 +101,7 @@ class SklearnWrapper(_BaseEstimator):
         self.estimator.fit(X_np, y)
         return self
 
-    def _aggregate_window_preds(
-        self, preds: np.ndarray, Xt: "TimeTensor", n_original: int
-    ) -> np.ndarray:
+    def _aggregate_window_preds(self, preds: np.ndarray, Xt: "TimeTensor", n_original: int) -> np.ndarray:
         """Aggregate window-level predictions to sample level using mean.
 
         SlidingWindow stores per-sample window counts in Xt.metadata["_window_counts"].
@@ -146,11 +144,7 @@ class SklearnWrapper(_BaseEstimator):
         X_np = Xt.data.reshape(Xt.n_samples, -1)
         # Use Xt.y when the pipeline changed the sample count (e.g. SlidingWindow).
         # The estimator was trained on the expanded labels, so scoring must use them too.
-        y_score = (
-            Xt.y
-            if Xt.y is not None and (y_external is None or len(Xt.y) != len(y_external))
-            else y_external
-        )
+        y_score = Xt.y if Xt.y is not None and (y_external is None or len(Xt.y) != len(y_external)) else y_external
         return self.estimator.score(X_np, y_score)
 
     # ------------------------------------------------------------------
@@ -179,9 +173,9 @@ class SklearnWrapper(_BaseEstimator):
             elif key == "estimator":
                 self.estimator = value
             elif key.startswith("pipeline__"):
-                self.pipeline.set_params(**{key[len("pipeline__"):]: value})
+                self.pipeline.set_params(**{key[len("pipeline__") :]: value})
             elif key.startswith("estimator__"):
-                self.estimator.set_params(**{key[len("estimator__"):]: value})
+                self.estimator.set_params(**{key[len("estimator__") :]: value})
             else:
                 raise ValueError(
                     f"Invalid parameter {key!r} for SklearnWrapper. "

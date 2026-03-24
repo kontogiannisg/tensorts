@@ -11,7 +11,6 @@ Supports two modes:
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Sequence
 
 import numpy as np
@@ -110,9 +109,7 @@ class TimeTensor:
         schema = DimSchema(dims)
 
         if data.ndim != schema.ndim:
-            raise ValueError(
-                f"Data has {data.ndim} axes but dims specifies {schema.ndim}: {schema}"
-            )
+            raise ValueError(f"Data has {data.ndim} axes but dims specifies {schema.ndim}: {schema}")
 
         # Build or validate ChannelIndex
         ch_dim = self._find_channel_dim(schema)
@@ -123,10 +120,7 @@ class TimeTensor:
             elif isinstance(channels, (list, tuple)):
                 channels = ChannelIndex(channels, groups=channel_groups)
             if len(channels) != ch_size:
-                raise ValueError(
-                    f"ChannelIndex has {len(channels)} names but axis "
-                    f"{ch_dim.name} has size {ch_size}."
-                )
+                raise ValueError(f"ChannelIndex has {len(channels)} names but axis {ch_dim.name} has size {ch_size}.")
             if channel_groups and isinstance(channels, ChannelIndex):
                 for gname, pattern in channel_groups.items():
                     if gname not in channels.groups:
@@ -140,8 +134,7 @@ class TimeTensor:
             y = np.asarray(y)
             if schema.has(Dim.BATCH) and len(y) != data.shape[schema.axis(Dim.BATCH)]:
                 raise ValueError(
-                    f"Label length {len(y)} doesn't match batch size "
-                    f"{data.shape[schema.axis(Dim.BATCH)]}."
+                    f"Label length {len(y)} doesn't match batch size {data.shape[schema.axis(Dim.BATCH)]}."
                 )
 
         self._data = data
@@ -184,13 +177,9 @@ class TimeTensor:
             s = np.asarray(s)
             samples[i] = s
             if s.ndim != ndim_0:
-                raise ValueError(
-                    f"Sample {i} has {s.ndim} dims, expected {ndim_0}."
-                )
+                raise ValueError(f"Sample {i} has {s.ndim} dims, expected {ndim_0}.")
             if ndim_0 >= 2 and s.shape[1:] != samples[0].shape[1:]:
-                raise ValueError(
-                    f"Sample {i} has shape {s.shape}, expected (T_i, {samples[0].shape[1:]})."
-                )
+                raise ValueError(f"Sample {i} has shape {s.shape}, expected (T_i, {samples[0].shape[1:]}).")
 
         # Promote 1-D samples to (T_i, 1)
         if ndim_0 == 1:
@@ -211,16 +200,12 @@ class TimeTensor:
                     channels.add_group(gname, pattern)
 
         if len(channels) != n_channels:
-            raise ValueError(
-                f"ChannelIndex has {len(channels)} names but samples have {n_channels} channels."
-            )
+            raise ValueError(f"ChannelIndex has {len(channels)} names but samples have {n_channels} channels.")
 
         if y is not None:
             y = np.asarray(y)
             if len(y) != len(samples):
-                raise ValueError(
-                    f"Label length {len(y)} doesn't match sample count {len(samples)}."
-                )
+                raise ValueError(f"Label length {len(y)} doesn't match sample count {len(samples)}.")
 
         return cls._from_ragged_internal(
             samples=samples,
@@ -255,10 +240,7 @@ class TimeTensor:
     @property
     def data(self) -> np.ndarray:
         if self.is_ragged:
-            raise RuntimeError(
-                "Cannot access .data on a ragged TimeTensor. "
-                "Use .samples or apply windowing first."
-            )
+            raise RuntimeError("Cannot access .data on a ragged TimeTensor. Use .samples or apply windowing first.")
         return self._data
 
     @property
@@ -278,7 +260,6 @@ class TimeTensor:
         """Per-sample time-axis lengths (ragged mode only)."""
         if not self.is_ragged:
             return None
-        t_local = 0 if not self._schema.has(Dim.BATCH) else 0
         # In ragged, samples are (T_i, C), time is axis 0
         return [s.shape[0] for s in self._samples]
 
@@ -432,9 +413,7 @@ class TimeTensor:
             return self
         max_len = max(s.shape[0] for s in self._samples)
         n_ch = self._samples[0].shape[-1]
-        padded = np.full(
-            (len(self._samples), max_len, n_ch), pad_value, dtype=self.dtype
-        )
+        padded = np.full((len(self._samples), max_len, n_ch), pad_value, dtype=self.dtype)
         lengths = []
         for i, s in enumerate(self._samples):
             padded[i, : s.shape[0], :] = s
@@ -517,14 +496,7 @@ class TimeTensor:
 
     def __repr__(self) -> str:
         mode = "ragged" if self.is_ragged else "dense"
-        shape_str = (
-            f"({self.n_samples}, [variable], {self.n_channels})"
-            if self.is_ragged
-            else str(self.shape)
-        )
+        shape_str = f"({self.n_samples}, [variable], {self.n_channels})" if self.is_ragged else str(self.shape)
         dims_str = ", ".join(d.name for d in self.dims)
         y_str = f", y={self._y.shape}" if self._y is not None else ""
-        return (
-            f"TimeTensor({mode}, shape={shape_str}, "
-            f"dims=({dims_str}){y_str})"
-        )
+        return f"TimeTensor({mode}, shape={shape_str}, dims=({dims_str}){y_str})"

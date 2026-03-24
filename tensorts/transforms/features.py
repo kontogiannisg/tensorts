@@ -23,19 +23,19 @@ def _kurtosis_fn(x: np.ndarray) -> float:
 
 
 _STAT_FN_MAP: dict = {
-    "mean":     np.mean,
-    "std":      np.std,
-    "var":      np.var,
-    "min":      np.min,
-    "max":      np.max,
-    "median":   np.median,
-    "rms":      lambda x: float(np.sqrt(np.mean(x ** 2))),
-    "range":    np.ptp,
-    "energy":   lambda x: float(np.sum(x ** 2)),
-    "skew":     _skew_fn,
+    "mean": np.mean,
+    "std": np.std,
+    "var": np.var,
+    "min": np.min,
+    "max": np.max,
+    "median": np.median,
+    "rms": lambda x: float(np.sqrt(np.mean(x**2))),
+    "range": np.ptp,
+    "energy": lambda x: float(np.sum(x**2)),
+    "skew": _skew_fn,
     "kurtosis": _kurtosis_fn,
-    "iqr":      lambda x: float(np.percentile(x, 75) - np.percentile(x, 25)),
-    "zcr":      lambda x: float(np.mean(np.diff(np.signbit(x)).astype(np.float64))),
+    "iqr": lambda x: float(np.percentile(x, 75) - np.percentile(x, 25)),
+    "zcr": lambda x: float(np.mean(np.diff(np.signbit(x)).astype(np.float64))),
 }
 
 _VALID_STAT_FEATURES = frozenset(_STAT_FN_MAP.keys())
@@ -111,10 +111,7 @@ def make_statistical_extractor(
         elif isinstance(entry, tuple) and len(entry) in (2, 3):
             functions.append(entry)
         else:
-            raise TypeError(
-                f"Each feature must be a str or (name, fn) / (name, fn, kwargs) tuple; "
-                f"got {entry!r}."
-            )
+            raise TypeError(f"Each feature must be a str or (name, fn) / (name, fn, kwargs) tuple; got {entry!r}.")
 
     if unknown_strings:
         raise ValueError(

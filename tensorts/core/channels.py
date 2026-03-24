@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from typing import Sequence, Union
+from typing import Sequence
 
 import numpy as np
 
@@ -57,10 +57,7 @@ class ChannelIndex:
             # Treat as glob pattern
             matched = self._glob(channels)
             if not matched:
-                raise KeyError(
-                    f"Glob pattern {channels!r} matched no channels. "
-                    f"Available: {self._names}"
-                )
+                raise KeyError(f"Glob pattern {channels!r} matched no channels. Available: {self._names}")
             self._groups[name] = matched
         else:
             for ch in channels:
@@ -71,9 +68,7 @@ class ChannelIndex:
     def group(self, name: str) -> np.ndarray:
         """Return integer indices for a named group."""
         if name not in self._groups:
-            raise KeyError(
-                f"Group {name!r} not found. Available: {list(self._groups.keys())}"
-            )
+            raise KeyError(f"Group {name!r} not found. Available: {list(self._groups.keys())}")
         return np.array([self._name_to_idx[n] for n in self._groups[name]])
 
     def group_names(self, name: str) -> list[str]:
@@ -115,9 +110,7 @@ class ChannelIndex:
             for k in key:
                 idx = self._resolve_key(k)
                 indices.append(idx)
-                names_out.extend(
-                    self._names[i] for i in idx
-                )
+                names_out.extend(self._names[i] for i in idx)
             return np.concatenate(indices)
 
         if isinstance(key, int):

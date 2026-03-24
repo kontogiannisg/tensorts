@@ -5,11 +5,10 @@ Data loading utilities for creating TimeTensors from common formats.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
-from ..core.channels import ChannelIndex
 from ..core.dims import Dim
 from ..core.tensor import TimeTensor
 
@@ -107,9 +106,7 @@ def from_csv(
                 labels.append(group_rows[0][label_column])
 
         y = np.array(labels) if labels else None
-        return TimeTensor.from_ragged(
-            samples, channels=channel_columns, y=y, metadata=metadata
-        )
+        return TimeTensor.from_ragged(samples, channels=channel_columns, y=y, metadata=metadata)
     else:
         # Single sample or batch-is-rows
         data = np.array(
@@ -155,9 +152,7 @@ def from_dataframe(
         exclude.add(group_by)
 
     if channel_columns is None:
-        channel_columns = [
-            c for c in df.select_dtypes(include=[np.number]).columns if c not in exclude
-        ]
+        channel_columns = [c for c in df.select_dtypes(include=[np.number]).columns if c not in exclude]
 
     if group_by:
         samples = []
@@ -169,9 +164,7 @@ def from_dataframe(
                 labels.append(group[label_column].iloc[0])
 
         y = np.array(labels) if labels else None
-        return TimeTensor.from_ragged(
-            samples, channels=channel_columns, y=y, metadata=metadata
-        )
+        return TimeTensor.from_ragged(samples, channels=channel_columns, y=y, metadata=metadata)
     else:
         data = df[channel_columns].values.astype(np.float64)
         data = data[np.newaxis, :, :]

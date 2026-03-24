@@ -12,11 +12,11 @@ Run with the 'aiot' conda env which has sklearn installed:
 """
 
 import sys
+
 sys.path.insert(0, ".")
 
 import numpy as np
 from sklearn.base import clone
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.model_selection import (
     GridSearchCV,
@@ -36,13 +36,13 @@ from tensorts import (
     TimeTensor,
     make_statistical_extractor,
 )
-from tensorts.transforms.functional import FeatureExtractor, FunctionTransform, StatefulFunctionTransform
 from tensorts.transforms.base import Scope
-
+from tensorts.transforms.functional import FeatureExtractor, FunctionTransform, StatefulFunctionTransform
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Synthetic data generators
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def make_har_data(n_subjects=12, n_classes=3, channels=6, seed=42):
     """
@@ -58,8 +58,7 @@ def make_har_data(n_subjects=12, n_classes=3, channels=6, seed=42):
             # Class-specific signal: sinusoid at different frequencies
             t = np.linspace(0, 1, T)
             base = np.sin(2 * np.pi * (c + 1) * 3 * t)
-            signal = np.stack([base + 0.3 * rng.standard_normal(T)
-                               for _ in range(channels)], axis=-1)
+            signal = np.stack([base + 0.3 * rng.standard_normal(T) for _ in range(channels)], axis=-1)
             samples.append(signal.astype(np.float32))
             labels.append(c)
 
@@ -82,17 +81,18 @@ def make_audio_data(n_clips=24, channels=2, seed=7):
         label = i % 2
         if label == 0:  # speech-like: harmonic
             t = np.linspace(0, 1, T)
-            sig = np.column_stack([
-                np.sin(2 * np.pi * 200 * t) + 0.1 * rng.standard_normal(T),
-                np.sin(2 * np.pi * 400 * t) + 0.1 * rng.standard_normal(T),
-            ])
+            sig = np.column_stack(
+                [
+                    np.sin(2 * np.pi * 200 * t) + 0.1 * rng.standard_normal(T),
+                    np.sin(2 * np.pi * 400 * t) + 0.1 * rng.standard_normal(T),
+                ]
+            )
         else:  # noise
             sig = rng.standard_normal((T, 2))
         samples.append(sig.astype(np.float32))
         labels.append(label)
 
-    return TimeTensor.from_ragged(samples, channels=["left", "right"],
-                                  y=np.array(labels))
+    return TimeTensor.from_ragged(samples, channels=["left", "right"], y=np.array(labels))
 
 
 def make_biosignal_data(n_recordings=20, channels=4, seed=13):
@@ -152,8 +152,7 @@ def make_financial_data(n_assets=6, n_periods=20, channels=3, seed=99):
             # Regression target: total return over period
             labels.append(float(log_price[-1] - log_price[0]))
 
-    return TimeTensor.from_ragged(samples, channels=["log_price", "volume", "vol"],
-                                  y=np.array(labels))
+    return TimeTensor.from_ragged(samples, channels=["log_price", "volume", "vol"], y=np.array(labels))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -174,10 +173,11 @@ def make_financial_data(n_assets=6, n_periods=20, channels=3, seed=99):
 #   - get_params / set_params must work through the full depth
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def problem1_har_crossval():
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("PROBLEM 1: HAR — ragged → FunctionTransform → SlidingWindow → cross_val_score")
-    print("="*70)
+    print("=" * 70)
 
     X = make_har_data()
     y = X.y
@@ -192,15 +192,21 @@ def problem1_har_crossval():
 
     from tensorts.transforms.shape import PCA
 
-    pipe = Pipeline([
-        ("pre_emph", FunctionTransform(pre_emphasis, scope=Scope.PER_CHANNEL,
-                                       fn_kwargs={"coeff": 0.97}, name="pre_emphasis")),
-        ("scaler",   StandardScaler()),
-        ("window",   SlidingWindow(size=100, stride=50, label_strategy="repeat", flatten_batch=True)),
-        ("stats",    make_statistical_extractor(["mean", "std", "min", "max", "energy"])),
-        ("flatten",  Flatten()),
-        ("pca",      PCA(n_components=0.95)),
-    ])
+    pipe = Pipeline(
+        [
+            (
+                "pre_emph",
+                FunctionTransform(
+                    pre_emphasis, scope=Scope.PER_CHANNEL, fn_kwargs={"coeff": 0.97}, name="pre_emphasis"
+                ),
+            ),
+            ("scaler", StandardScaler()),
+            ("window", SlidingWindow(size=100, stride=50, label_strategy="repeat", flatten_batch=True)),
+            ("stats", make_statistical_extractor(["mean", "std", "min", "max", "energy"])),
+            ("flatten", Flatten()),
+            ("pca", PCA(n_components=0.95)),
+        ]
+    )
 
     # ── 1a. Basic fit_transform
     Xt = pipe.fit_transform(X, y)
@@ -268,10 +274,11 @@ def problem1_har_crossval():
 #   - FeatureExtractor output_dims must be in get_params (was a bug: output_dims_spec)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def problem2_audio_gridsearch():
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("PROBLEM 2: Audio — FeatureExtractor(FFT bands) + GridSearchCV")
-    print("="*70)
+    print("=" * 70)
 
     X = make_audio_data()
     y = X.y
@@ -283,24 +290,28 @@ def problem2_audio_gridsearch():
         """Compute energy in n_bands frequency bands. Returns (n_bands,)."""
         spec = np.abs(np.fft.rfft(signal_1d)) ** 2
         band_size = max(1, len(spec) // n_bands)
-        bands = np.array([spec[i * band_size:(i + 1) * band_size].mean()
-                          for i in range(n_bands)])
+        bands = np.array([spec[i * band_size : (i + 1) * band_size].mean() for i in range(n_bands)])
         return np.log1p(bands)
 
     from tensorts.transforms.shape import PCA
 
-    pipe = Pipeline([
-        ("scaler",   StandardScaler()),
-        ("fft_feat", FeatureExtractor(
-            fn=fft_energy_bands,
-            input_dim=Dim.TIME,
-            output_dims=(Dim.FREQUENCY,),
-            fn_kwargs={"n_bands": N_BANDS},
-            name="fft_energy_bands",
-        )),
-        ("flatten",  Flatten()),
-        ("pca",      PCA(n_components=10)),
-    ])
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "fft_feat",
+                FeatureExtractor(
+                    fn=fft_energy_bands,
+                    input_dim=Dim.TIME,
+                    output_dims=(Dim.FREQUENCY,),
+                    fn_kwargs={"n_bands": N_BANDS},
+                    name="fft_energy_bands",
+                ),
+            ),
+            ("flatten", Flatten()),
+            ("pca", PCA(n_components=10)),
+        ]
+    )
 
     # ── 2a. Fit-transform sanity
     Xt = pipe.fit_transform(X, y)
@@ -310,11 +321,14 @@ def problem2_audio_gridsearch():
     # ── 2b. clone() — FeatureExtractor.get_params must return actual fn and Dim objects
     cloned = clone(pipe)
     assert callable(cloned["fft_feat"].fn), "fn must survive clone"
-    assert cloned["fft_feat"].output_dims == (Dim.FREQUENCY,), \
+    assert cloned["fft_feat"].output_dims == (Dim.FREQUENCY,), (
         f"output_dims must survive clone, got {cloned['fft_feat'].output_dims}"
+    )
     assert cloned["fft_feat"].input_dim == Dim.TIME
-    print(f"  clone() ok — FeatureExtractor fn={cloned['fft_feat'].fn.__name__}, "
-          f"output_dims={cloned['fft_feat'].output_dims}")
+    print(
+        f"  clone() ok — FeatureExtractor fn={cloned['fft_feat'].fn.__name__}, "
+        f"output_dims={cloned['fft_feat'].output_dims}"
+    )
 
     # ── 2c. get_params deep inspection
     params = pipe.get_params(deep=True)
@@ -340,6 +354,7 @@ def problem2_audio_gridsearch():
 
     print("  Problem 2 done.")
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Problem 3: Biosignal — StatefulFunctionTransform + heterogeneous channels
 #
@@ -359,10 +374,11 @@ def problem2_audio_gridsearch():
 #   - After scalar extraction ragged → dense: each sample becomes (C,)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def problem3_biosignal_stateful():
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("PROBLEM 3: Biosignal — StatefulFunctionTransform + FeatureExtractor(scalar)")
-    print("="*70)
+    print("=" * 70)
 
     from tensorts import Interpolate
 
@@ -383,24 +399,34 @@ def problem3_biosignal_stateful():
 
     # Total signal energy: scalar
     def total_energy(signal_1d: np.ndarray) -> np.ndarray:
-        return np.array(np.sum(signal_1d ** 2))
+        return np.array(np.sum(signal_1d**2))
 
-    pipe = Pipeline([
-        ("interp",  Interpolate(method="linear")),
-        ("scaler",  RobustScaler()),
-        ("peak",    StatefulFunctionTransform(
-            fit_fn=fit_peak, transform_fn=transform_peak,
-            scope=Scope.PER_CHANNEL, name="peak_norm",
-        )),
-        ("diff",    FunctionTransform(first_diff, scope=Scope.PER_CHANNEL, name="first_diff")),
-        ("energy",  FeatureExtractor(
-            fn=total_energy,
-            input_dim=Dim.TIME,
-            output_dims=(),          # scalar per channel → collapses TIME entirely
-            name="total_energy",
-        )),
-        ("flatten", Flatten()),
-    ])
+    pipe = Pipeline(
+        [
+            ("interp", Interpolate(method="linear")),
+            ("scaler", RobustScaler()),
+            (
+                "peak",
+                StatefulFunctionTransform(
+                    fit_fn=fit_peak,
+                    transform_fn=transform_peak,
+                    scope=Scope.PER_CHANNEL,
+                    name="peak_norm",
+                ),
+            ),
+            ("diff", FunctionTransform(first_diff, scope=Scope.PER_CHANNEL, name="first_diff")),
+            (
+                "energy",
+                FeatureExtractor(
+                    fn=total_energy,
+                    input_dim=Dim.TIME,
+                    output_dims=(),  # scalar per channel → collapses TIME entirely
+                    name="total_energy",
+                ),
+            ),
+            ("flatten", Flatten()),
+        ]
+    )
 
     # ── 3a. Fit-transform
     Xt = pipe.fit_transform(X, y)
@@ -414,9 +440,10 @@ def problem3_biosignal_stateful():
     assert callable(cloned["peak"].fit_fn), "fit_fn must survive clone"
     assert callable(cloned["peak"].transform_fn), "transform_fn must survive clone"
     assert callable(cloned["diff"].fn), "FunctionTransform fn must survive clone"
-    assert cloned["energy"].output_dims == (), \
+    assert cloned["energy"].output_dims == (), (
         f"scalar output_dims must survive clone, got {cloned['energy'].output_dims}"
-    print(f"  clone() ok — StatefulFunctionTransform and FeatureExtractor preserved")
+    )
+    print("  clone() ok — StatefulFunctionTransform and FeatureExtractor preserved")
 
     # ── 3c. get_params deep inspection
     params = pipe.get_params(deep=True)
@@ -428,8 +455,9 @@ def problem3_biosignal_stateful():
     # ── 3d. cross_validate
     wrapper = SklearnWrapper(pipe, LogisticRegression(max_iter=500))
     try:
-        cv_results = cross_validate(wrapper, X, y, cv=StratifiedKFold(3, shuffle=True, random_state=0),
-                                    return_train_score=True)
+        cv_results = cross_validate(
+            wrapper, X, y, cv=StratifiedKFold(3, shuffle=True, random_state=0), return_train_score=True
+        )
         print(f"  cross_validate test scores:  {cv_results['test_score'].round(3)}")
         print(f"  cross_validate train scores: {cv_results['train_score'].round(3)}")
     except Exception as e:
@@ -459,10 +487,11 @@ def problem3_biosignal_stateful():
 #   - score(X_test, y_test) label-length mismatch again (same issue as Problem 1)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def problem4_financial_gridsearch():
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("PROBLEM 4: Financial regression — SlidingWindow + FeatureExtractor + GridSearchCV")
-    print("="*70)
+    print("=" * 70)
 
     from tensorts.transforms.base import ChannelSelect
 
@@ -487,21 +516,29 @@ def problem4_financial_gridsearch():
     # StatisticalFeatures CANNOT follow because there is no TIME axis left.
     # The features are the autocorrelation values themselves — just Flatten to (B*K, C).
     # Gap documented: StatisticalFeatures should raise a clear error when TIME is absent.
-    pipe = Pipeline([
-        ("log_vol",  ChannelSelect(
-            channels="volume",
-            transform=FunctionTransform(log1p_fn, scope=Scope.PER_CHANNEL, name="log1p"),
-        )),
-        ("scaler",   RobustScaler()),
-        ("window",   SlidingWindow(size=50, stride=25, label_strategy="repeat", flatten_batch=True)),
-        ("autocorr", FeatureExtractor(
-            fn=autocorr_lag1,
-            input_dim=Dim.TIME,
-            output_dims=(),   # scalar per channel: (B*K, W, C) → (B*K, C)
-            name="autocorr_lag1",
-        )),
-        ("flatten",  Flatten()),   # (B*K, C) → (B*K, C) — already flat, no-op effectively
-    ])
+    pipe = Pipeline(
+        [
+            (
+                "log_vol",
+                ChannelSelect(
+                    channels="volume",
+                    transform=FunctionTransform(log1p_fn, scope=Scope.PER_CHANNEL, name="log1p"),
+                ),
+            ),
+            ("scaler", RobustScaler()),
+            ("window", SlidingWindow(size=50, stride=25, label_strategy="repeat", flatten_batch=True)),
+            (
+                "autocorr",
+                FeatureExtractor(
+                    fn=autocorr_lag1,
+                    input_dim=Dim.TIME,
+                    output_dims=(),  # scalar per channel: (B*K, W, C) → (B*K, C)
+                    name="autocorr_lag1",
+                ),
+            ),
+            ("flatten", Flatten()),  # (B*K, C) → (B*K, C) — already flat, no-op effectively
+        ]
+    )
 
     # ── 4a. Fit-transform sanity
     Xt = pipe.fit_transform(X, y)
@@ -514,13 +551,14 @@ def problem4_financial_gridsearch():
     assert cloned["window"].stride == 25
     assert callable(cloned["log_vol"].inner.fn)
     assert callable(cloned["autocorr"].fn)
-    print(f"  clone() ok — SlidingWindow(size={cloned['window'].size}), "
-          f"FeatureExtractor.fn={cloned['autocorr'].fn.__name__}")
+    print(
+        f"  clone() ok — SlidingWindow(size={cloned['window'].size}), "
+        f"FeatureExtractor.fn={cloned['autocorr'].fn.__name__}"
+    )
 
     # ── 4c. Deeply nested get_params / set_params
     params = pipe.get_params(deep=True)
-    print(f"  SlidingWindow params in Pipeline: "
-          f"{ {k: v for k, v in params.items() if 'window' in k and '__' in k} }")
+    print(f"  SlidingWindow params in Pipeline: { {k: v for k, v in params.items() if 'window' in k and '__' in k} }")
     assert "window__size" in params
     assert "window__stride" in params
 
@@ -532,9 +570,9 @@ def problem4_financial_gridsearch():
     # ── 4d. GridSearchCV — exercises clone + nested set_params on int params
     wrapper = SklearnWrapper(pipe, Ridge())
     param_grid = {
-        "pipeline__window__size":   [30, 50],
+        "pipeline__window__size": [30, 50],
         "pipeline__window__stride": [15, 25],
-        "estimator__alpha":          [0.1, 1.0],
+        "estimator__alpha": [0.1, 1.0],
     }
     gs = GridSearchCV(wrapper, param_grid, cv=3, refit=True, scoring="r2", n_jobs=1)
     try:

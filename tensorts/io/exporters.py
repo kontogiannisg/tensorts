@@ -59,4 +59,4 @@ def to_dataframe(ts: TimeTensor, sample_index: int = 0):
     if sample.ndim == 1:
         sample = sample[:, np.newaxis]
 
-    return pd.DataFrame(sample, columns=columns[:sample.shape[-1]])
+    return pd.DataFrame(sample, columns=columns[: sample.shape[-1]])

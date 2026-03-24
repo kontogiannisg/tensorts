@@ -13,10 +13,10 @@ from ..core.dims import Dim
 from ..core.tensor import TimeTensor
 from .base import Scope, Transform
 
-
 # ======================================================================
 # PreEmphasis
 # ======================================================================
+
 
 class PreEmphasis(Transform):
     """Pre-emphasis filter: ``y[t] = x[t] - coeff * x[t-1]``.
@@ -54,15 +54,14 @@ class PreEmphasis(Transform):
         slices_prev[t_ax] = slice(None, -1)
 
         result = data.copy()
-        result[tuple(slices_curr)] = (
-            data[tuple(slices_curr)] - self.coeff * data[tuple(slices_prev)]
-        )
+        result[tuple(slices_curr)] = data[tuple(slices_curr)] - self.coeff * data[tuple(slices_prev)]
         return X.with_data(result)
 
 
 # ======================================================================
 # ButterworthFilter
 # ======================================================================
+
 
 class ButterworthFilter(Transform):
     """Butterworth IIR filter along the time axis.
@@ -117,6 +116,7 @@ class ButterworthFilter(Transform):
 
     def _apply_filter(self, arr: np.ndarray) -> np.ndarray:
         from scipy.signal import sosfiltfilt
+
         return sosfiltfilt(self._sos, arr, axis=0).astype(arr.dtype)
 
     def transform(self, X: TimeTensor) -> TimeTensor:
@@ -127,6 +127,7 @@ class ButterworthFilter(Transform):
 
         t_ax = X.axis(Dim.TIME) if X.has_dim(Dim.TIME) else 1
         from scipy.signal import sosfiltfilt
+
         filtered = sosfiltfilt(self._sos, X.data, axis=t_ax).astype(X.dtype)
         return X.with_data(filtered)
 
@@ -134,6 +135,7 @@ class ButterworthFilter(Transform):
 # ======================================================================
 # STFT
 # ======================================================================
+
 
 class STFT(Transform):
     """Short-Time Fourier Transform.
@@ -171,6 +173,7 @@ class STFT(Transform):
 
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "STFT":
         from scipy.signal import get_window
+
         self._window_func = get_window(self.window, self.n_fft).astype(np.float64)
         self._is_fitted = True
         return self
@@ -225,6 +228,7 @@ class STFT(Transform):
 # ======================================================================
 # MelSpectrogram
 # ======================================================================
+
 
 class MelSpectrogram(Transform):
     """Mel-scaled spectrogram.
@@ -341,6 +345,7 @@ class MelSpectrogram(Transform):
 # LogTransform
 # ======================================================================
 
+
 class LogTransform(Transform):
     """Element-wise log transform: ``log(x + eps)``."""
 
@@ -367,6 +372,7 @@ class LogTransform(Transform):
 # ======================================================================
 # BandpassFilter (convenience wrapper)
 # ======================================================================
+
 
 class BandpassFilter(ButterworthFilter):
     """Convenience bandpass filter."""
