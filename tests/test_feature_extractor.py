@@ -932,7 +932,7 @@ test("Single-fn PER_SAMPLE dense vector output", test_single_fn_per_sample_dense
 
 def test_single_fn_per_sample_ragged():
     """Single-fn PER_SAMPLE: ragged input, fn receives (T_i, C)."""
-    from tensorts import Dim, FeatureExtractor, Scope, TimeTensor
+    from tensorts import FeatureExtractor, Scope, TimeTensor
 
     def energy_per_sample(x):
         """Total energy across all channels."""
@@ -992,7 +992,7 @@ test("Multi-fn PER_SAMPLE dense", test_multi_fn_per_sample_dense)
 
 def test_multi_fn_per_sample_ragged():
     """Multi-fn PER_SAMPLE: ragged input."""
-    from tensorts import Dim, FeatureExtractor, Scope, TimeTensor
+    from tensorts import FeatureExtractor, Scope, TimeTensor
 
     def total_energy(x):
         return float(np.sum(x**2))
