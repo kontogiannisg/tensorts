@@ -21,7 +21,12 @@ python tests/test_feature_union.py            # 13 tests — parallel extraction
 
 There are no single-test flags. To run one test, comment out others or extract the test function and call it directly.
 
-Each `.py` test file has a corresponding `.ipynb` notebook that mirrors it step-by-step with intermediate output for debugging.
+Each `.py` test file has a corresponding `.ipynb` notebook in `examples/` that mirrors it step-by-step with intermediate output for debugging:
+- `examples/01_Core_and_Transforms.ipynb` — mirrors `test_tensorts.py`
+- `examples/02_FunctionTransform.ipynb` — mirrors `test_function_transform.py`
+- `examples/03_FeatureExtractor.ipynb` — mirrors `test_feature_extractor.py`
+- `examples/04_Sklearn_Integration.ipynb` — mirrors `test_sklearn_compat_problems.py`
+- `examples/HAR_Classification_with_tensorts.ipynb` — end-to-end UCI HAR classification
 
 ## Architecture
 
