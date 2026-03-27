@@ -1086,13 +1086,14 @@ def test_per_sample_pipeline_integration():
 
     data = np.random.randn(12, 128, 6)
     y = np.random.randint(0, 3, 12)
-    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
-                    channels=["ax", "ay", "az", "gx", "gy", "gz"], y=y)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["ax", "ay", "az", "gx", "gy", "gz"], y=y)
 
-    pipe = Pipeline([
-        ("scale", StandardScaler()),
-        ("fe", FeatureExtractor(fn=cross_channel_features, scope=Scope.PER_SAMPLE, output_dims=(Dim.FEATURE,))),
-    ])
+    pipe = Pipeline(
+        [
+            ("scale", StandardScaler()),
+            ("fe", FeatureExtractor(fn=cross_channel_features, scope=Scope.PER_SAMPLE, output_dims=(Dim.FEATURE,))),
+        ]
+    )
     result = pipe.fit_transform(ts)
 
     assert result.shape == (12, 4), f"Expected (12, 4), got {result.shape}"

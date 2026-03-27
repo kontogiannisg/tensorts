@@ -799,8 +799,10 @@ class FeatureExtractor(Transform):
         if len(shapes) == 1:
             stacked = np.stack(results, axis=0)
             return TimeTensor(
-                data=stacked, dims=new_dims,
-                y=X.y, metadata=X.metadata,
+                data=stacked,
+                dims=new_dims,
+                y=X.y,
+                metadata=X.metadata,
             )
         return X.with_ragged(results, dims=new_dims)
 
@@ -841,8 +843,11 @@ class FeatureExtractor(Transform):
         self.feature_names_out_ = feature_names
         meta = {**X.metadata, "_feature_names": feature_names}
         return TimeTensor(
-            data=combined, dims=new_dims, channels=feature_names,
-            y=X.y, metadata=meta,
+            data=combined,
+            dims=new_dims,
+            channels=feature_names,
+            y=X.y,
+            metadata=meta,
         )
 
     def _transform_multi_per_sample_ragged(self, X: TimeTensor) -> TimeTensor:
@@ -868,8 +873,11 @@ class FeatureExtractor(Transform):
         self.feature_names_out_ = feature_names
         meta = {**X.metadata, "_feature_names": feature_names}
         return TimeTensor(
-            data=stacked, dims=new_dims, channels=feature_names,
-            y=X.y, metadata=meta,
+            data=stacked,
+            dims=new_dims,
+            channels=feature_names,
+            y=X.y,
+            metadata=meta,
         )
 
     # ------------------------------------------------------------------
