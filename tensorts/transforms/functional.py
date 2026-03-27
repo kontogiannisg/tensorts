@@ -510,8 +510,6 @@ class FeatureExtractor(Transform):
                     "'output_dims' is only used in single-fn mode. "
                     "In multi-fn mode the output axis is always Dim.FEATURE."
                 )
-            if self.scope == Scope.PER_SAMPLE:
-                raise NotImplementedError("Scope.PER_SAMPLE is not yet supported in multi-fn mode.")
             # Normalise to 3-tuples (name, fn, kwargs)
             normalised = []
             for entry in functions:
@@ -557,6 +555,15 @@ class FeatureExtractor(Transform):
         return np.asarray(self.fn(arr, *self.fn_args, **self.fn_kwargs))
 
     def transform(self, X: TimeTensor) -> TimeTensor:
+        if self.scope == Scope.PER_SAMPLE:
+            if self._mode == "single":
+                if X.is_ragged:
+                    return self._transform_per_sample_ragged(X)
+                return self._transform_per_sample_dense(X)
+            else:
+                if X.is_ragged:
+                    return self._transform_multi_per_sample_ragged(X)
+                return self._transform_multi_per_sample_dense(X)
         if self._mode == "single":
             if X.is_ragged:
                 return self._transform_ragged(X)
@@ -753,6 +760,122 @@ class FeatureExtractor(Transform):
             data=stacked,
             dims=new_dims,
             channels=X.channels,
+            y=X.y,
+            metadata=meta,
+        )
+
+    # ------------------------------------------------------------------
+    # Single-fn mode — PER_SAMPLE (dense and ragged)
+    # ------------------------------------------------------------------
+
+    def _transform_per_sample_dense(self, X: TimeTensor) -> TimeTensor:
+        """Single-fn PER_SAMPLE: pass (T, C) per sample to fn."""
+        data = X.data
+        b_ax = X.axis(Dim.BATCH) if X.has_dim(Dim.BATCH) else 0
+        ch_dim = X._find_channel_dim(X.schema)
+        ch_ax = X.axis(ch_dim) if ch_dim is not None else data.ndim - 1
+        B = data.shape[b_ax]
+
+        other_axes = [i for i in range(data.ndim) if i not in (b_ax, ch_ax)]
+        perm = [b_ax] + other_axes + [ch_ax]
+        transposed = np.transpose(data, perm)
+        T_merged = int(np.prod(transposed.shape[1:-1]))
+        C = transposed.shape[-1]
+        flat = transposed.reshape(B, T_merged, C)
+
+        results = [self._call_fn(flat[i]) for i in range(B)]
+        out = np.stack(results, axis=0)
+
+        new_dims = (Dim.BATCH,) + self.output_dims
+        # No channel dim in output — channels were consumed by PER_SAMPLE
+        return TimeTensor(data=out, dims=new_dims, y=X.y, metadata=X.metadata)
+
+    def _transform_per_sample_ragged(self, X: TimeTensor) -> TimeTensor:
+        """Single-fn PER_SAMPLE ragged: each sample is (T_i, C)."""
+        results = [self._call_fn(s) for s in X._samples]
+        shapes = set(r.shape for r in results)
+        new_dims = (Dim.BATCH,) + self.output_dims
+
+        if len(shapes) == 1:
+            stacked = np.stack(results, axis=0)
+            return TimeTensor(
+                data=stacked,
+                dims=new_dims,
+                y=X.y,
+                metadata=X.metadata,
+            )
+        return X.with_ragged(results, dims=new_dims)
+
+    # ------------------------------------------------------------------
+    # Multi-fn mode — PER_SAMPLE (dense and ragged)
+    # ------------------------------------------------------------------
+
+    def _transform_multi_per_sample_dense(self, X: TimeTensor) -> TimeTensor:
+        """Multi-fn PER_SAMPLE: pass (T, C) per sample to each function."""
+        data = X.data
+        b_ax = X.axis(Dim.BATCH) if X.has_dim(Dim.BATCH) else 0
+        ch_dim = X._find_channel_dim(X.schema)
+        ch_ax = X.axis(ch_dim) if ch_dim is not None else data.ndim - 1
+        B = data.shape[b_ax]
+
+        other_axes = [i for i in range(data.ndim) if i not in (b_ax, ch_ax)]
+        perm = [b_ax] + other_axes + [ch_ax]
+        transposed = np.transpose(data, perm)
+        T_merged = int(np.prod(transposed.shape[1:-1]))
+        C = transposed.shape[-1]
+        flat = transposed.reshape(B, T_merged, C)
+
+        fn_outputs: list[np.ndarray] = []
+        feature_names: list[str] = []
+        for fname, fn, kwargs in self._functions_normalized:
+            probe = np.asarray(fn(flat[0], **kwargs)).ravel()
+            K_i = probe.size
+            fn_out = np.empty((B, K_i), dtype=probe.dtype)
+            fn_out[0] = probe
+            for n in range(1, B):
+                fn_out[n] = np.asarray(fn(flat[n], **kwargs)).ravel()
+            fn_outputs.append(fn_out)
+            for k in range(K_i):
+                feature_names.append(fname if K_i == 1 else f"{fname}__{k}")
+
+        combined = np.concatenate(fn_outputs, axis=1)  # (B, K_total)
+        new_dims = (Dim.BATCH, Dim.FEATURE)
+        self.feature_names_out_ = feature_names
+        meta = {**X.metadata, "_feature_names": feature_names}
+        return TimeTensor(
+            data=combined,
+            dims=new_dims,
+            channels=feature_names,
+            y=X.y,
+            metadata=meta,
+        )
+
+    def _transform_multi_per_sample_ragged(self, X: TimeTensor) -> TimeTensor:
+        """Multi-fn PER_SAMPLE ragged: pass (T_i, C) per sample to each function."""
+        # Build feature names from first sample
+        feature_names: list[str] = []
+        for fname, fn, kwargs in self._functions_normalized:
+            probe = np.asarray(fn(X._samples[0], **kwargs)).ravel()
+            K_i = probe.size
+            for k in range(K_i):
+                feature_names.append(fname if K_i == 1 else f"{fname}__{k}")
+
+        all_results: list[np.ndarray] = []
+        for sample in X._samples:
+            parts = []
+            for fname, fn, kwargs in self._functions_normalized:
+                r = np.asarray(fn(sample, **kwargs)).ravel()
+                parts.append(r)
+            all_results.append(np.concatenate(parts))
+
+        stacked = np.stack(all_results, axis=0)  # (B, K_total)
+        new_dims = (Dim.BATCH, Dim.FEATURE)
+        self.feature_names_out_ = feature_names
+        meta = {**X.metadata, "_feature_names": feature_names}
+        return TimeTensor(
+            data=stacked,
+            dims=new_dims,
+            channels=feature_names,
             y=X.y,
             metadata=meta,
         )

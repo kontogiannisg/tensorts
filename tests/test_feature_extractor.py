@@ -876,6 +876,235 @@ test("Pipeline: FeatureExtractor → Flatten descriptive names", test_flatten_de
 
 
 # =====================================================================
+# PART 5: FeatureExtractor — Scope.PER_SAMPLE (issue #2)
+# =====================================================================
+print()
+print("=" * 60)
+print("PART 5: FeatureExtractor — Scope.PER_SAMPLE")
+print("=" * 60)
+
+
+def test_single_fn_per_sample_dense_scalar():
+    """Single-fn PER_SAMPLE: fn(T, C) → scalar, dense input."""
+    from tensorts import Dim, FeatureExtractor, Scope, TimeTensor
+
+    def acc_magnitude_mean(x):
+        """Mean acceleration magnitude across channels."""
+        return float(np.sqrt(np.sum(x**2, axis=1)).mean())
+
+    data = np.random.randn(8, 128, 3)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["ax", "ay", "az"])
+
+    fe = FeatureExtractor(fn=acc_magnitude_mean, scope=Scope.PER_SAMPLE, output_dims=())
+    fe.fit(ts)
+    result = fe.transform(ts)
+
+    assert result.shape == (8,), f"Expected (8,), got {result.shape}"
+    assert result.channels is None, f"Expected no channels, got {result.channels}"
+    print(f"    scalar PER_SAMPLE: {ts.shape} → {result.shape}")
+
+
+test("Single-fn PER_SAMPLE dense scalar", test_single_fn_per_sample_dense_scalar)
+
+
+def test_single_fn_per_sample_dense_vector():
+    """Single-fn PER_SAMPLE: fn(T, C) → (K,), dense input."""
+    from tensorts import Dim, FeatureExtractor, Scope, TimeTensor
+
+    def cross_channel_stats(x):
+        """Compute SMA (signal magnitude area) per timestep, then return [mean, std, max]."""
+        sma = np.sum(np.abs(x), axis=1)
+        return np.array([sma.mean(), sma.std(), sma.max()])
+
+    data = np.random.randn(5, 100, 4)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["a", "b", "c", "d"])
+
+    fe = FeatureExtractor(fn=cross_channel_stats, scope=Scope.PER_SAMPLE, output_dims=(Dim.FEATURE,))
+    fe.fit(ts)
+    result = fe.transform(ts)
+
+    assert result.shape == (5, 3), f"Expected (5, 3), got {result.shape}"
+    print(f"    vector PER_SAMPLE: {ts.shape} → {result.shape}")
+
+
+test("Single-fn PER_SAMPLE dense vector output", test_single_fn_per_sample_dense_vector)
+
+
+def test_single_fn_per_sample_ragged():
+    """Single-fn PER_SAMPLE: ragged input, fn receives (T_i, C)."""
+    from tensorts import FeatureExtractor, Scope, TimeTensor
+
+    def energy_per_sample(x):
+        """Total energy across all channels."""
+        return float(np.sum(x**2))
+
+    samples = [np.random.randn(np.random.randint(50, 200), 3) for _ in range(10)]
+    ts = TimeTensor.from_ragged(samples, channels=["x", "y", "z"])
+
+    fe = FeatureExtractor(fn=energy_per_sample, scope=Scope.PER_SAMPLE, output_dims=())
+    fe.fit(ts)
+    result = fe.transform(ts)
+
+    assert result.shape == (10,), f"Expected (10,), got {result.shape}"
+    assert result.channels is None
+    print(f"    ragged PER_SAMPLE: {ts.n_samples} samples → {result.shape}")
+
+
+test("Single-fn PER_SAMPLE ragged", test_single_fn_per_sample_ragged)
+
+
+def test_multi_fn_per_sample_dense():
+    """Multi-fn PER_SAMPLE: multiple fns each receive (T, C)."""
+    from tensorts import Dim, FeatureExtractor, Scope, TimeTensor
+
+    def sma_mean(x):
+        return float(np.sum(np.abs(x), axis=1).mean())
+
+    def acc_magnitude_mean(x):
+        return float(np.sqrt(np.sum(x**2, axis=1)).mean())
+
+    def channel_correlation(x):
+        """Mean pairwise correlation between channels."""
+        if x.shape[1] < 2:
+            return 0.0
+        corr = np.corrcoef(x.T)
+        mask = np.triu(np.ones_like(corr, dtype=bool), k=1)
+        return float(np.mean(corr[mask]))
+
+    data = np.random.randn(6, 128, 3)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["ax", "ay", "az"])
+
+    fe = FeatureExtractor(
+        functions=[("sma", sma_mean), ("mag", acc_magnitude_mean), ("corr", channel_correlation)],
+        scope=Scope.PER_SAMPLE,
+    )
+    fe.fit(ts)
+    result = fe.transform(ts)
+
+    assert result.shape == (6, 3), f"Expected (6, 3), got {result.shape}"
+    assert result.metadata.get("_feature_names") == ["sma", "mag", "corr"]
+    assert list(result.channels.names) == ["sma", "mag", "corr"]
+    print(f"    multi-fn PER_SAMPLE: {ts.shape} → {result.shape}, features={result.metadata['_feature_names']}")
+
+
+test("Multi-fn PER_SAMPLE dense", test_multi_fn_per_sample_dense)
+
+
+def test_multi_fn_per_sample_ragged():
+    """Multi-fn PER_SAMPLE: ragged input."""
+    from tensorts import FeatureExtractor, Scope, TimeTensor
+
+    def total_energy(x):
+        return float(np.sum(x**2))
+
+    def mean_abs(x):
+        return float(np.mean(np.abs(x)))
+
+    samples = [np.random.randn(np.random.randint(80, 200), 4) for _ in range(8)]
+    ts = TimeTensor.from_ragged(samples, channels=["a", "b", "c", "d"])
+
+    fe = FeatureExtractor(
+        functions=[("energy", total_energy), ("mean_abs", mean_abs)],
+        scope=Scope.PER_SAMPLE,
+    )
+    fe.fit(ts)
+    result = fe.transform(ts)
+
+    assert result.shape == (8, 2), f"Expected (8, 2), got {result.shape}"
+    assert result.metadata.get("_feature_names") == ["energy", "mean_abs"]
+    print(f"    multi-fn PER_SAMPLE ragged: {ts.n_samples} → {result.shape}")
+
+
+test("Multi-fn PER_SAMPLE ragged", test_multi_fn_per_sample_ragged)
+
+
+def test_per_sample_cross_channel_acceleration_magnitude():
+    """Real use case: acceleration magnitude requires all 3 channels at once."""
+    from tensorts import Dim, FeatureExtractor, Scope, TimeTensor
+
+    def acc_magnitude(x):
+        """Compute acceleration magnitude: sqrt(ax^2 + ay^2 + az^2) per timestep."""
+        return np.sqrt(np.sum(x**2, axis=1))  # (T,) → 1D
+
+    data = np.random.randn(10, 128, 3)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["ax", "ay", "az"])
+
+    fe = FeatureExtractor(fn=acc_magnitude, scope=Scope.PER_SAMPLE, output_dims=(Dim.TIME,))
+    fe.fit(ts)
+    result = fe.transform(ts)
+
+    assert result.shape == (10, 128), f"Expected (10, 128), got {result.shape}"
+    # Verify correctness for first sample
+    expected = np.sqrt(data[0, :, 0] ** 2 + data[0, :, 1] ** 2 + data[0, :, 2] ** 2)
+    np.testing.assert_allclose(result.data[0], expected, rtol=1e-6)
+    print(f"    acceleration magnitude: {ts.shape} → {result.shape}")
+
+
+test("PER_SAMPLE cross-channel acceleration magnitude", test_per_sample_cross_channel_acceleration_magnitude)
+
+
+def test_per_sample_multi_fn_vector_output():
+    """Multi-fn PER_SAMPLE where a function returns a vector."""
+    from tensorts import Dim, FeatureExtractor, Scope, TimeTensor
+
+    def per_channel_means(x):
+        """Return mean of each channel — (C,) output."""
+        return x.mean(axis=0)
+
+    def per_channel_stds(x):
+        return x.std(axis=0)
+
+    data = np.random.randn(5, 100, 3)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["x", "y", "z"])
+
+    fe = FeatureExtractor(
+        functions=[("ch_means", per_channel_means), ("ch_stds", per_channel_stds)],
+        scope=Scope.PER_SAMPLE,
+    )
+    fe.fit(ts)
+    result = fe.transform(ts)
+
+    # 3 from ch_means + 3 from ch_stds = 6 features
+    assert result.shape == (5, 6), f"Expected (5, 6), got {result.shape}"
+    expected_names = ["ch_means__0", "ch_means__1", "ch_means__2", "ch_stds__0", "ch_stds__1", "ch_stds__2"]
+    assert result.metadata["_feature_names"] == expected_names
+    assert list(result.channels.names) == expected_names
+    print(f"    multi-fn vector PER_SAMPLE: {ts.shape} → {result.shape}")
+
+
+test("Multi-fn PER_SAMPLE vector output", test_per_sample_multi_fn_vector_output)
+
+
+def test_per_sample_pipeline_integration():
+    """Pipeline: StandardScaler → FeatureExtractor(PER_SAMPLE) works end-to-end."""
+    from tensorts import Dim, FeatureExtractor, Pipeline, Scope, StandardScaler, TimeTensor
+
+    def cross_channel_features(x):
+        sma = np.sum(np.abs(x), axis=1)
+        mag = np.sqrt(np.sum(x**2, axis=1))
+        return np.array([sma.mean(), sma.std(), mag.mean(), mag.std()])
+
+    data = np.random.randn(12, 128, 6)
+    y = np.random.randint(0, 3, 12)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["ax", "ay", "az", "gx", "gy", "gz"], y=y)
+
+    pipe = Pipeline(
+        [
+            ("scale", StandardScaler()),
+            ("fe", FeatureExtractor(fn=cross_channel_features, scope=Scope.PER_SAMPLE, output_dims=(Dim.FEATURE,))),
+        ]
+    )
+    result = pipe.fit_transform(ts)
+
+    assert result.shape == (12, 4), f"Expected (12, 4), got {result.shape}"
+    np.testing.assert_array_equal(result.y, y)
+    print(f"    pipeline PER_SAMPLE: {ts.shape} → {result.shape}")
+
+
+test("Pipeline: StandardScaler → FeatureExtractor PER_SAMPLE", test_per_sample_pipeline_integration)
+
+
+# =====================================================================
 # Summary
 # =====================================================================
 print()
