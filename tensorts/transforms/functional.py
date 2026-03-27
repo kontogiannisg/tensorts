@@ -351,31 +351,65 @@ class StatefulFunctionTransform(Transform):
 
 
 class FeatureExtractor(Transform):
-    """Extract features per channel, with single-function or multi-function support.
+    """Extract features that change dimensionality, with flexible scope.
 
-    Operates in two modes selected by which constructor argument is provided:
+    FeatureExtractor is for operations where the semantic meaning of an axis
+    changes (e.g., time → features, time → frequency).  Unlike
+    ``FunctionTransform`` (which preserves the dim schema), FeatureExtractor
+    replaces the consumed axis with new output dims.
 
+    It operates in **two modes** (select one via constructor arguments) and
+    supports **two scopes** that control what each function receives:
+
+    Modes
+    -----
     **Single-fn mode** (``fn=...``)
-        One callable that receives a 1-D vector (one channel of one sample)
-        and may return any shape.  The consumed axis (``input_dim``) is
-        replaced by ``output_dims`` in the schema.
+        One callable, arbitrary output shape.  The consumed axis
+        (``input_dim``) is replaced by ``output_dims`` in the schema.
 
-        Use this for spectrograms, STFT, wavelets, and other transforms that
-        produce multi-dimensional output per channel.
+        Use cases: spectrograms, STFT, wavelets, resampling, scalar
+        reduction (energy, RMS), or any per-sample cross-channel feature.
 
     **Multi-fn mode** (``functions=[...]``)
         A list of ``(name, fn)`` or ``(name, fn, per_fn_kwargs)`` entries.
-        Each ``fn`` receives a 1-D vector and **must** return a scalar or a
-        1-D array.  All outputs are concatenated along a new ``Dim.FEATURE``
-        axis (replacing ``input_dim``), exactly like sklearn's FeatureUnion.
+        Each ``fn`` must return a scalar or 1-D array.  All outputs are
+        concatenated along a new ``Dim.FEATURE`` axis (replacing
+        ``input_dim``).  Feature names are stored in metadata for
+        descriptive naming when followed by ``Flatten``.
 
-        Use this to replace ``StatisticalFeatures`` or ``FrameFeatureBank``
-        with plain functions, or to build custom multi-feature pipelines.
+        Use cases: statistical summaries, custom multi-feature pipelines,
+        replacing manual feature-extraction loops.
+
+    Scopes
+    ------
+    **Scope.PER_CHANNEL** (default)
+        Each function receives a **1-D array** ``(T,)`` — one channel of
+        one sample.  The CHANNEL axis is preserved in the output.  This is
+        the standard mode for per-channel statistics and spectral features.
+
+    **Scope.PER_SAMPLE**
+        Each function receives a **2-D array** ``(T, C)`` — all channels
+        of one sample at once.  The CHANNEL axis is **consumed** (the
+        function sees all channels together), so output has no CHANNEL dim.
+
+        Use cases: cross-channel features like Signal Magnitude Area (SMA),
+        acceleration magnitude ``sqrt(ax² + ay² + az²)``, inter-channel
+        correlation, or any feature that requires simultaneous access to
+        multiple channels.
+
+    To combine PER_CHANNEL and PER_SAMPLE extractors in a single pipeline,
+    use ``FeatureUnion`` which runs multiple transforms in parallel on the
+    same input and concatenates their outputs.
 
     Parameters
     ----------
     fn : callable, optional
-        *Single-fn mode only.*  ``fn(x: ndarray[T]) -> ndarray``
+        *Single-fn mode only.*  Signature depends on scope:
+
+        - ``Scope.PER_CHANNEL``: ``fn(x: ndarray[T]) -> ndarray``
+        - ``Scope.PER_SAMPLE``:  ``fn(x: ndarray[T, C]) -> ndarray``
+
+        Output shape determines ``output_dims``:
 
         - ``(T',)`` → 1-D output, axis length changes
         - ``(D1, D2, ...)`` → multi-dim, axis is replaced by new axes
@@ -389,6 +423,7 @@ class FeatureExtractor(Transform):
 
         - ``(Dim.TIME,)`` — same axis, different length
         - ``(Dim.FREQUENCY, Dim.TIME)`` — e.g. spectrogram
+        - ``(Dim.FEATURE,)`` — feature vector (common with PER_SAMPLE)
         - ``()`` — scalar, axis removed
 
     fn_args : tuple
@@ -406,63 +441,98 @@ class FeatureExtractor(Transform):
         or 1-D array; 2-D+ output raises ``ValueError``.
 
     scope : Scope
-        *Multi-fn mode only.*  Currently only ``Scope.PER_CHANNEL``
-        (default) is supported — each function receives a 1-D array for
-        one channel of one sample.
+        Controls what each function receives.  Default: ``PER_CHANNEL``.
+        See "Scopes" above for details.
 
     Attributes
     ----------
     feature_names_out_ : list of str
         Set after the first ``transform`` call (multi-fn mode).  Names are
-        ``"{fn_name}__{ch_name}"`` for scalar outputs and
-        ``"{fn_name}__{k}__{ch_name}"`` for vector outputs.
+        ``"{fn_name}"`` for scalar outputs and ``"{fn_name}__{k}"`` for
+        vector outputs.
 
     Notes
     -----
-    Lambdas and locally-defined functions are not picklable, which means
-    ``GridSearchCV(n_jobs > 1)`` will fail.  Use named functions or
-    ``functools.partial`` if you need multiprocessing.
+    - Lambdas and locally-defined functions are not picklable, which means
+      ``GridSearchCV(n_jobs > 1)`` will fail.  Use named module-level
+      functions or ``functools.partial`` for multiprocessing.
+
+    - With ``Scope.PER_SAMPLE``, the output has **no CHANNEL dim** — the
+      function is responsible for combining channel information.  For
+      multi-fn mode, feature names are used as channel labels on the
+      ``Dim.FEATURE`` axis.
+
+    - Dense and ragged inputs are supported in all mode/scope combinations.
 
     Examples
     --------
-    **Single-fn** — mel spectrogram::
+    **Single-fn, PER_CHANNEL** — mel spectrogram::
 
         FeatureExtractor(
-            fn=lambda x: librosa.feature.melspectrogram(y=x, sr=16000, n_mels=64),
+            fn=mel_spectrogram,
             input_dim=Dim.TIME,
             output_dims=(Dim.FREQUENCY, Dim.TIME),
         )
-        # (B, T, 1) → (B, 64, FRAMES, 1)
-        # (B, K, T, 1) → (B, K, 64, FRAMES, 1)   windowed input works too
+        # (B, T, C) → (B, 64, FRAMES, C)
+        # (B, K, T, C) → (B, K, 64, FRAMES, C)   windowed input works too
 
-    **Single-fn** — scalar energy per channel::
+    **Single-fn, PER_CHANNEL** — scalar energy per channel::
 
-        FeatureExtractor(fn=lambda x: np.sum(x**2), input_dim=Dim.TIME, output_dims=())
+        FeatureExtractor(fn=lambda x: np.sum(x**2), output_dims=())
         # (B, T, C) → (B, C)
 
-    **Multi-fn** — statistical summary (replaces StatisticalFeatures)::
+    **Single-fn, PER_SAMPLE** — acceleration magnitude::
+
+        def acc_magnitude(x):
+            return np.sqrt(np.sum(x**2, axis=1))  # (T, C) → (T,)
 
         FeatureExtractor(
-            functions=[
-                ("mean",   np.mean),
-                ("std",    np.std),
-                ("energy", lambda x: np.sum(x**2)),
-            ],
-            input_dim=Dim.TIME,
+            fn=acc_magnitude,
+            scope=Scope.PER_SAMPLE,
+            output_dims=(Dim.TIME,),
         )
-        # (B, T, C) → (B, 3, C)  with Dim.FEATURE axis
-        # feature_names_out_: ["mean__ch0", "mean__ch1", ..., "std__ch0", ...]
+        # (B, T, 3) → (B, T)  — channels consumed
 
-    **Multi-fn** — mix scalar + vector (replaces FrameFeatureBank)::
+    **Single-fn, PER_SAMPLE** — cross-channel feature vector::
+
+        def cross_features(x):
+            sma = float(np.mean(np.sum(np.abs(x), axis=1)))
+            mag = float(np.mean(np.linalg.norm(x, axis=1)))
+            return np.array([sma, mag])
 
         FeatureExtractor(
-            functions=[
-                ("zcr",  lambda x: np.mean(np.diff(np.signbit(x)))),  # scalar
-                ("mfcc", compute_mfcc, {"n_mfcc": 13}),               # 13-elem
-            ],
-            input_dim=Dim.TIME,
+            fn=cross_features,
+            scope=Scope.PER_SAMPLE,
+            output_dims=(Dim.FEATURE,),
         )
-        # (B, K, T, C) → (B, K, 14, C)  with Dim.FEATURE axis
+        # (B, T, C) → (B, 2)  — channels consumed, 2 features out
+
+    **Multi-fn, PER_CHANNEL** — statistical summary::
+
+        FeatureExtractor(
+            functions=[("mean", np.mean), ("std", np.std)],
+        )
+        # (B, T, C) → (B, 2, C)  with Dim.FEATURE axis
+
+    **Multi-fn, PER_SAMPLE** — cross-channel statistics::
+
+        FeatureExtractor(
+            functions=[("sma", sma_fn), ("corr", correlation_fn)],
+            scope=Scope.PER_SAMPLE,
+        )
+        # (B, T, C) → (B, 2)  — channels consumed
+
+    **Combining scopes with FeatureUnion**::
+
+        from tensorts import FeatureUnion
+
+        FeatureUnion([
+            ("stats", make_statistical_extractor(["mean", "std"])),
+            ("cross", FeatureExtractor(fn=cross_features,
+                                       scope=Scope.PER_SAMPLE,
+                                       output_dims=(Dim.FEATURE,))),
+        ])
+        # Runs both on same input, concatenates: (B, 2*C + 2)
     """
 
     supports_ragged = True
