@@ -503,3 +503,195 @@ class ChannelSelect(Transform):
             else:
                 raise ValueError(f"Invalid parameter {key!r} for ChannelSelect.")
         return self
+
+
+# ======================================================================
+# FeatureUnion
+# ======================================================================
+
+
+class FeatureUnion(Transform):
+    """Run multiple transforms in parallel and concatenate their outputs.
+
+    Each sub-transform receives the **same** input ``TimeTensor``.  Their
+    outputs are flattened to 2-D ``(B, K_i)`` and horizontally concatenated
+    into a single ``(B, K_total)`` array with ``Dim.FEATURE``.
+
+    This is the tensorts equivalent of sklearn's ``FeatureUnion`` and is
+    designed for combining extractors with different scopes (e.g.,
+    per-channel statistics alongside per-sample cross-channel features).
+
+    Parameters
+    ----------
+    transformers : list of (name, Transform) tuples
+        Named sub-transforms to run in parallel.
+    """
+
+    supports_ragged = True
+    supports_partial_fit = True
+
+    def __init__(self, transformers: list[tuple[str, Transform]]) -> None:
+        super().__init__()
+        self._validate_transformers(transformers)
+        self.transformers = transformers
+
+    @staticmethod
+    def _validate_transformers(transformers: list[tuple[str, Transform]]) -> None:
+        if not transformers:
+            raise ValueError("FeatureUnion requires at least one transformer.")
+        names = set()
+        for name, tfm in transformers:
+            if not isinstance(name, str):
+                raise TypeError(f"Transformer name must be str, got {type(name)}.")
+            if not isinstance(tfm, Transform):
+                raise TypeError(f"Transformer '{name}' is not a Transform: {type(tfm)}.")
+            if name in names:
+                raise ValueError(f"Duplicate transformer name: {name!r}.")
+            names.add(name)
+
+    @staticmethod
+    def _to_2d(result: TimeTensor) -> tuple[np.ndarray, list[str]]:
+        """Flatten a transform result to (B, K) and return feature names."""
+        if result.is_ragged:
+            raise ValueError(
+                "FeatureUnion requires all sub-transforms to produce dense output. "
+                "Apply windowing or padding before using FeatureUnion with ragged transforms."
+            )
+        data = result.data
+        B = data.shape[0]
+        flat = data.reshape(B, -1)
+
+        # Build feature names
+        feature_names = result.metadata.get("_feature_names", None)
+        channels = result.channels
+
+        if feature_names is not None and channels is not None:
+            # Multi-fn per-channel: cross-product feature × channel
+            names = [f"{fn}__{ch}" for fn in feature_names for ch in channels.names]
+        elif feature_names is not None:
+            names = list(feature_names)
+        elif channels is not None:
+            n_per_ch = flat.shape[1] // len(channels.names) if len(channels.names) > 0 else flat.shape[1]
+            if n_per_ch > 1:
+                names = [f"f{j}__{ch}" for j in range(n_per_ch) for ch in channels.names]
+            else:
+                names = list(channels.names)
+        else:
+            names = [f"f_{i}" for i in range(flat.shape[1])]
+
+        # Truncate or pad names to match actual width
+        if len(names) != flat.shape[1]:
+            names = [f"f_{i}" for i in range(flat.shape[1])]
+
+        return flat, names
+
+    def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "FeatureUnion":
+        for name, tfm in self.transformers:
+            tfm.fit(X, y)
+        self._is_fitted = True
+        return self
+
+    def transform(self, X: TimeTensor) -> TimeTensor:
+        self._check_fitted()
+        parts: list[np.ndarray] = []
+        all_names: list[str] = []
+
+        for name, tfm in self.transformers:
+            result = tfm.transform(X)
+            flat, names = self._to_2d(result)
+            # Prefix feature names with transformer name
+            prefixed = [f"{name}__{n}" for n in names]
+            parts.append(flat)
+            all_names.extend(prefixed)
+
+        combined = np.concatenate(parts, axis=1)
+        meta = {**X.metadata, "_feature_names": all_names}
+        return TimeTensor(
+            data=combined,
+            dims=(Dim.BATCH, Dim.FEATURE),
+            channels=all_names,
+            y=X.y,
+            metadata=meta,
+        )
+
+    def fit_transform(self, X: TimeTensor, y: np.ndarray | None = None) -> TimeTensor:
+        parts: list[np.ndarray] = []
+        all_names: list[str] = []
+
+        for name, tfm in self.transformers:
+            result = tfm.fit_transform(X, y)
+            flat, names = self._to_2d(result)
+            prefixed = [f"{name}__{n}" for n in names]
+            parts.append(flat)
+            all_names.extend(prefixed)
+
+        combined = np.concatenate(parts, axis=1)
+        self._is_fitted = True
+        meta = {**X.metadata, "_feature_names": all_names}
+        return TimeTensor(
+            data=combined,
+            dims=(Dim.BATCH, Dim.FEATURE),
+            channels=all_names,
+            y=X.y,
+            metadata=meta,
+        )
+
+    def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "FeatureUnion":
+        for name, tfm in self.transformers:
+            tfm.partial_fit(X, y)
+        self._is_fitted = True
+        return self
+
+    def partial_fit_transform(self, X: TimeTensor, y: np.ndarray | None = None) -> TimeTensor:
+        parts: list[np.ndarray] = []
+        all_names: list[str] = []
+
+        for name, tfm in self.transformers:
+            result = tfm.partial_fit_transform(X, y)
+            flat, names = self._to_2d(result)
+            prefixed = [f"{name}__{n}" for n in names]
+            parts.append(flat)
+            all_names.extend(prefixed)
+
+        combined = np.concatenate(parts, axis=1)
+        self._is_fitted = True
+        meta = {**X.metadata, "_feature_names": all_names}
+        return TimeTensor(
+            data=combined,
+            dims=(Dim.BATCH, Dim.FEATURE),
+            channels=all_names,
+            y=X.y,
+            metadata=meta,
+        )
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        params: dict[str, Any] = {"transformers": self.transformers}
+        if deep:
+            for name, tfm in self.transformers:
+                params[name] = tfm
+                for key, val in tfm.get_params(deep=True).items():
+                    params[f"{name}__{key}"] = val
+        return params
+
+    def set_params(self, **params) -> "FeatureUnion":
+        for key, value in params.items():
+            if "__" in key:
+                tfm_name, param_rest = key.split("__", 1)
+                for name, tfm in self.transformers:
+                    if name == tfm_name:
+                        tfm.set_params(**{param_rest: value})
+                        break
+                else:
+                    raise ValueError(f"Unknown transformer {tfm_name!r} in FeatureUnion.")
+            elif key == "transformers":
+                self._validate_transformers(value)
+                self.transformers = value
+            else:
+                raise ValueError(
+                    f"Invalid parameter {key!r} for FeatureUnion. Use 'transformers' or 'name__param' format."
+                )
+        return self
+
+    def __repr__(self) -> str:
+        names = ", ".join(n for n, _ in self.transformers)
+        return f"FeatureUnion([{names}])"
