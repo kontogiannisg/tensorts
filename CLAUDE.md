@@ -12,10 +12,11 @@ Tests use a custom harness (not pytest). Run each suite directly:
 
 ```bash
 python tests/test_tensorts.py                  # 62 tests — core + all transforms
-python tests/test_feature_extractor.py         # 31 tests — multi-fn extraction + flatten naming
+python tests/test_feature_extractor.py         # 39 tests — multi-fn extraction + flatten naming + PER_SAMPLE
 python tests/test_function_transform.py        # 21 tests — stateful/stateless wrapping
 python tests/test_sklearn_compat_problems.py   # 4 end-to-end sklearn integration problems
 python tests/test_partial_fit.py               # 15 tests — incremental learning
+python tests/test_feature_union.py            # 13 tests — parallel extraction + mixed scopes
 ```
 
 There are no single-test flags. To run one test, comment out others or extract the test function and call it directly.
@@ -32,7 +33,7 @@ Each `.py` test file has a corresponding `.ipynb` notebook that mirrors it step-
 
 ### Transforms (`tensorts/transforms/`)
 
-- **`base.py`** — `Transform` ABC (with `partial_fit`/`partial_fit_transform`), `Pipeline`, `ChannelTransform`, `ChannelSelect`, `Scope` enum (PER_CHANNEL, PER_SAMPLE, GLOBAL, ELEMENTWISE)
+- **`base.py`** — `Transform` ABC (with `partial_fit`/`partial_fit_transform`), `Pipeline`, `ChannelTransform`, `ChannelSelect`, `FeatureUnion`, `Scope` enum (PER_CHANNEL, PER_SAMPLE, GLOBAL, ELEMENTWISE)
 - **`preprocessing.py`** — StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler, Normalizer, PowerTransformer, QuantileTransformer, Interpolate, LabelEncoder
 - **`temporal.py`** — SlidingWindow (the critical ragged→dense boundary), Pad, Truncate, Resample
 - **`spectral.py`** — PreEmphasis, Butterworth, STFT, MelSpectrogram, LogTransform
@@ -57,6 +58,8 @@ Each `.py` test file has a corresponding `.ipynb` notebook that mirrors it step-
 **Ragged tensors:** Transforms declare `supports_ragged = True/False`. Access samples via `.samples[i]`, never `.data` (which raises RuntimeError on ragged). Dense indexing: `X.data[i]` or `X[i].data[0]` (the latter preserves batch dim).
 
 **Scalers compute per-channel statistics:** StandardScaler/MinMaxScaler pool across batch and time (`reduce_axes = (0, 1)`), computing one mean/std per channel. Individual samples won't span [0,1] exactly with MinMaxScaler — only the most extreme sample touches 0 or 1.
+
+**FeatureUnion — parallel extraction with mixed scopes:** `FeatureUnion` runs multiple transforms on the same input and concatenates their flattened `(B, K_i)` outputs along `Dim.FEATURE`. This enables combining per-channel statistics (`Scope.PER_CHANNEL`) with cross-channel features (`Scope.PER_SAMPLE`) inside a single `Pipeline`. Feature names are prefixed with the transformer name (e.g., `stats__mean__ax`, `cross__sma`). Works with `SklearnWrapper`, `cross_val_score`, `partial_fit`, and `get_params`/`set_params`.
 
 **Incremental learning (`partial_fit`):** All transforms support `partial_fit()`. The base class falls back to `fit()` (full refit). Transforms with true incremental algorithms (StandardScaler via Welford's, MinMaxScaler, MaxAbsScaler, LabelEncoder, Interpolate) override it. `supports_partial_fit` class attribute indicates whether a transform does true incremental learning vs refitting. Pipeline chains `partial_fit_transform()` through steps. SklearnWrapper delegates to the pipeline and estimator's `partial_fit`.
 

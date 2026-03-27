@@ -1,6 +1,7 @@
 from .base import (
     ChannelSelect,
     ChannelTransform,
+    FeatureUnion,
     Pipeline,
     Scope,
     Transform,
@@ -51,6 +52,7 @@ __all__ = [
     "Pipeline",
     "ChannelTransform",
     "ChannelSelect",
+    "FeatureUnion",
     "Scope",
     # Functional
     "FunctionTransform",

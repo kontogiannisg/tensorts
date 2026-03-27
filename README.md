@@ -36,10 +36,11 @@ Run the test suite to verify:
 
 ```bash
 python tests/test_tensorts.py                  # 62 tests
-python tests/test_feature_extractor.py         # 31 tests
+python tests/test_feature_extractor.py         # 39 tests
 python tests/test_function_transform.py        # 21 tests
 python tests/test_sklearn_compat_problems.py   # 4 real-world problems
 python tests/test_partial_fit.py               # 15 incremental learning tests
+python tests/test_feature_union.py            # 13 parallel extraction tests
 ```
 
 ---
@@ -56,7 +57,7 @@ tensorts/
 │   └── tensor.py        — TimeTensor: the central data container
 │
 ├── transforms/          — All transforms (sklearn fit/transform protocol)
-│   ├── base.py          — Transform ABC, Pipeline, ChannelTransform, ChannelSelect, Scope
+│   ├── base.py          — Transform ABC, Pipeline, ChannelTransform, ChannelSelect, FeatureUnion, Scope
 │   ├── preprocessing.py — StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler,
 │   │                       Normalizer, PowerTransformer, QuantileTransformer,
 │   │                       Interpolate, LabelEncoder
@@ -460,6 +461,31 @@ ct = ChannelTransform(
 cs = ChannelSelect('eeg_*', BandpassFilter(low=0.5, high=40, sampling_rate=256))
 ```
 
+### FeatureUnion — parallel extraction with mixed scopes
+
+```python
+from tensorts import FeatureUnion, FeatureExtractor, Scope, make_statistical_extractor
+
+def cross_channel_features(x):
+    """x is (T, C) — all channels at once."""
+    sma = float(np.mean(np.sum(np.abs(x), axis=1)))
+    mag = float(np.mean(np.linalg.norm(x, axis=1)))
+    return np.array([sma, mag])
+
+pipe = Pipeline([
+    ('scaler',   StandardScaler()),
+    ('features', FeatureUnion([
+        ('stats', make_statistical_extractor(['mean', 'std', 'rms'])),
+        ('cross', FeatureExtractor(fn=cross_channel_features,
+                                   scope=Scope.PER_SAMPLE,
+                                   output_dims=(Dim.FEATURE,),
+                                   name='cross')),
+    ])),
+])
+# Each sub-transform runs on the same input; outputs are flattened and concatenated.
+# Result: (B, 3*C + 2) with descriptive feature names.
+```
+
 ---
 
 ## sklearn integration via SklearnWrapper
@@ -762,6 +788,7 @@ for train_fold, test_fold in kfold_temporal(ts, n_folds=5):
 | `Pipeline` | Sequential chain with named steps |
 | `ChannelTransform` | Different transforms per channel group |
 | `ChannelSelect` | Transform a subset; passthrough others |
+| `FeatureUnion` | Run transforms in parallel, concatenate outputs |
 | `SklearnWrapper` | Bridge to sklearn CV tools (supports `partial_fit`) |
 
 ---

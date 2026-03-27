@@ -5,7 +5,7 @@ Core:
     TimeTensor, Dim, DimSchema, ChannelIndex
 
 Pipeline:
-    Pipeline, Transform, ChannelTransform, ChannelSelect
+    Pipeline, Transform, ChannelTransform, ChannelSelect, FeatureUnion
 
 Transforms:
     StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler,
@@ -45,6 +45,7 @@ from .transforms import (
     ChannelSelect,
     ChannelTransform,
     FeatureExtractor,
+    FeatureUnion,
     Flatten,
     FunctionTransform,
     Interpolate,
