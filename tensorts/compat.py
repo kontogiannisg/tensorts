@@ -151,9 +151,9 @@ class SklearnWrapper(_BaseEstimator):
         y_external = self._labels(X, y)
         Xt = self.pipeline.transform(X)
         X_np = Xt.data.reshape(Xt.n_samples, -1)
-        # Use Xt.y when the pipeline changed the sample count (e.g. SlidingWindow).
-        # The estimator was trained on the expanded labels, so scoring must use them too.
-        y_score = Xt.y if Xt.y is not None and (y_external is None or len(Xt.y) != len(y_external)) else y_external
+        # Always prefer pipeline-transformed y (Xt.y) — it reflects any encoding
+        # (LabelEncoder) or sample expansion (SlidingWindow) applied during transform.
+        y_score = Xt.y if Xt.y is not None else y_external
         return self.estimator.score(X_np, y_score)
 
     # ------------------------------------------------------------------
