@@ -857,15 +857,17 @@ class FeatureExtractor(Transform):
         out = np.stack(results, axis=0)
 
         new_dims = (Dim.BATCH,) + self.output_dims
-        # Build feature names for FEATURE dim output
+        # Build feature names — PER_SAMPLE consumes channels, so store names
         meta = dict(X.metadata)
-        channels = None
-        if Dim.FEATURE in self.output_dims:
-            K = out.shape[-1]
-            fn_name = self.name or "feat"
-            feat_names = [fn_name] if K == 1 else [f"{fn_name}_{k}" for k in range(K)]
-            meta["_feature_names"] = feat_names
-            channels = feat_names
+        fn_name = self.name or "feat"
+        if len(self.output_dims) == 0:
+            # Scalar output: (B,) — one feature per sample
+            meta["_feature_names"] = [fn_name]
+            return TimeTensor(data=out, dims=new_dims, y=X.y, metadata=meta)
+        K = out.shape[-1] if out.ndim > 1 else 1
+        feat_names = [fn_name] if K == 1 else [f"{fn_name}_{k}" for k in range(K)]
+        meta["_feature_names"] = feat_names
+        channels = feat_names if Dim.FEATURE in self.output_dims else None
         return TimeTensor(data=out, dims=new_dims, channels=channels, y=X.y, metadata=meta)
 
     def _transform_per_sample_ragged(self, X: TimeTensor) -> TimeTensor:
@@ -874,17 +876,23 @@ class FeatureExtractor(Transform):
         shapes = set(r.shape for r in results)
         new_dims = (Dim.BATCH,) + self.output_dims
 
-        # Build feature names for FEATURE dim output
+        # Build feature names — PER_SAMPLE consumes channels, so store names
         meta = dict(X.metadata)
+        fn_name = self.name or "feat"
         channels = None
-        if Dim.FEATURE in self.output_dims and len(shapes) == 1:
-            K = results[0].shape[-1] if results[0].ndim > 0 else 1
-            fn_name = self.name or "feat"
-            feat_names = [fn_name] if K == 1 else [f"{fn_name}_{k}" for k in range(K)]
-            meta["_feature_names"] = feat_names
-            channels = feat_names
+
+        if len(self.output_dims) == 0:
+            # Scalar output: (B,) — one feature per sample
+            meta["_feature_names"] = [fn_name]
+            stacked = np.stack(results, axis=0)
+            return TimeTensor(data=stacked, dims=new_dims, y=X.y, metadata=meta)
 
         if len(shapes) == 1:
+            K = results[0].shape[-1] if results[0].ndim > 0 else 1
+            feat_names = [fn_name] if K == 1 else [f"{fn_name}_{k}" for k in range(K)]
+            meta["_feature_names"] = feat_names
+            channels = feat_names if Dim.FEATURE in self.output_dims else None
+
             stacked = np.stack(results, axis=0)
             return TimeTensor(
                 data=stacked,
