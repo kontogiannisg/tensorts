@@ -857,8 +857,16 @@ class FeatureExtractor(Transform):
         out = np.stack(results, axis=0)
 
         new_dims = (Dim.BATCH,) + self.output_dims
-        # No channel dim in output — channels were consumed by PER_SAMPLE
-        return TimeTensor(data=out, dims=new_dims, y=X.y, metadata=X.metadata)
+        # Build feature names for FEATURE dim output
+        meta = dict(X.metadata)
+        channels = None
+        if Dim.FEATURE in self.output_dims:
+            K = out.shape[-1]
+            fn_name = self.name or "feat"
+            feat_names = [fn_name] if K == 1 else [f"{fn_name}_{k}" for k in range(K)]
+            meta["_feature_names"] = feat_names
+            channels = feat_names
+        return TimeTensor(data=out, dims=new_dims, channels=channels, y=X.y, metadata=meta)
 
     def _transform_per_sample_ragged(self, X: TimeTensor) -> TimeTensor:
         """Single-fn PER_SAMPLE ragged: each sample is (T_i, C)."""
@@ -866,13 +874,24 @@ class FeatureExtractor(Transform):
         shapes = set(r.shape for r in results)
         new_dims = (Dim.BATCH,) + self.output_dims
 
+        # Build feature names for FEATURE dim output
+        meta = dict(X.metadata)
+        channels = None
+        if Dim.FEATURE in self.output_dims and len(shapes) == 1:
+            K = results[0].shape[-1] if results[0].ndim > 0 else 1
+            fn_name = self.name or "feat"
+            feat_names = [fn_name] if K == 1 else [f"{fn_name}_{k}" for k in range(K)]
+            meta["_feature_names"] = feat_names
+            channels = feat_names
+
         if len(shapes) == 1:
             stacked = np.stack(results, axis=0)
             return TimeTensor(
                 data=stacked,
                 dims=new_dims,
+                channels=channels,
                 y=X.y,
-                metadata=X.metadata,
+                metadata=meta,
             )
         return X.with_ragged(results, dims=new_dims)
 

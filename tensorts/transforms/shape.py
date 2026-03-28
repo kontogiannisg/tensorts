@@ -93,20 +93,34 @@ class Flatten(Transform):
     def _build_feature_names(X: TimeTensor, M: int) -> list[str]:
         """Build descriptive feature names when possible.
 
-        When the input has both ``_feature_names`` metadata (set by
-        FeatureExtractor multi-fn mode) and channel names, produces
-        cross-product names like ``'mean__acc_x'``.  Otherwise falls
-        back to ``'f_0', 'f_1', ...``.
+        Priority order:
+
+        1. Cross-product: ``_feature_names`` × ``channels`` when their
+           product equals M (standard FeatureExtractor multi-fn output).
+        2. Direct: ``_feature_names`` already matches M (FeatureUnion
+           output or PER_SAMPLE extractor — already flat).
+        3. Direct: ``channels`` already matches M (already-flat input
+           with named channels).
+        4. Fallback: ``'f_0', 'f_1', ...``
         """
         feat_axis_names = X.metadata.get("_feature_names")
         ch_names = X.channels.names if X.channels is not None else None
 
+        # Cross-product: feature_names × channel_names
         if feat_axis_names and ch_names and len(feat_axis_names) * len(ch_names) == M:
             names = []
             for fn in feat_axis_names:
                 for cn in ch_names:
                     names.append(f"{fn}__{cn}")
             return names
+
+        # Already flat with feature names matching width
+        if feat_axis_names and len(feat_axis_names) == M:
+            return list(feat_axis_names)
+
+        # Already flat with channel names matching width
+        if ch_names and len(ch_names) == M:
+            return list(ch_names)
 
         return [f"f_{i}" for i in range(M)]
 

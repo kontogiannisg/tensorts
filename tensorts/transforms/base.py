@@ -566,20 +566,31 @@ class FeatureUnion(Transform):
         channels = result.channels
 
         if feature_names is not None and channels is not None:
-            # Multi-fn per-channel: cross-product feature × channel
-            names = [f"{fn}__{ch}" for fn in feature_names for ch in channels.names]
-        elif feature_names is not None:
-            names = list(feature_names)
-        elif channels is not None:
-            n_per_ch = flat.shape[1] // len(channels.names) if len(channels.names) > 0 else flat.shape[1]
-            if n_per_ch > 1:
-                names = [f"f{j}__{ch}" for j in range(n_per_ch) for ch in channels.names]
-            else:
+            if len(feature_names) * len(channels.names) == flat.shape[1]:
+                # Multi-fn per-channel: cross-product feature × channel
+                names = [f"{fn}__{ch}" for fn in feature_names for ch in channels.names]
+            elif len(feature_names) == flat.shape[1]:
+                # Already flat with feature names (e.g., PER_SAMPLE or FeatureUnion)
+                names = list(feature_names)
+            elif len(channels.names) == flat.shape[1]:
                 names = list(channels.names)
+            else:
+                names = [f"f_{i}" for i in range(flat.shape[1])]
+        elif feature_names is not None:
+            if len(feature_names) == flat.shape[1]:
+                names = list(feature_names)
+            else:
+                names = [f"f_{i}" for i in range(flat.shape[1])]
+        elif channels is not None:
+            if len(channels.names) == flat.shape[1]:
+                names = list(channels.names)
+            else:
+                n_per_ch = flat.shape[1] // len(channels.names) if len(channels.names) > 0 else flat.shape[1]
+                names = [f"f{j}__{ch}" for j in range(n_per_ch) for ch in channels.names]
         else:
             names = [f"f_{i}" for i in range(flat.shape[1])]
 
-        # Truncate or pad names to match actual width
+        # Safety: if name count doesn't match width, fall back
         if len(names) != flat.shape[1]:
             names = [f"f_{i}" for i in range(flat.shape[1])]
 
