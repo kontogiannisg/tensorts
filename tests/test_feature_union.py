@@ -102,8 +102,8 @@ def test_mixed_scope_per_channel_and_per_sample():
     assert result.shape == (10, 8), f"Expected (10, 8), got {result.shape}"
     names = list(result.channels.names)
     assert len(names) == 8
-    # Cross features should be prefixed with 'cross__'
-    assert any("cross__" in n for n in names)
+    # Cross features should use the function name
+    assert any("cross" in n for n in names)
     print(f"    shape: {result.shape}, features: {names}")
 
 

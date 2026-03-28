@@ -610,10 +610,8 @@ class FeatureUnion(Transform):
         for name, tfm in self.transformers:
             result = tfm.transform(X)
             flat, names = self._to_2d(result)
-            # Prefix feature names with transformer name
-            prefixed = [f"{name}__{n}" for n in names]
             parts.append(flat)
-            all_names.extend(prefixed)
+            all_names.extend(names)
 
         combined = np.concatenate(parts, axis=1)
         meta = {**X.metadata, "_feature_names": all_names}
@@ -632,9 +630,8 @@ class FeatureUnion(Transform):
         for name, tfm in self.transformers:
             result = tfm.fit_transform(X, y)
             flat, names = self._to_2d(result)
-            prefixed = [f"{name}__{n}" for n in names]
             parts.append(flat)
-            all_names.extend(prefixed)
+            all_names.extend(names)
 
         combined = np.concatenate(parts, axis=1)
         self._is_fitted = True
@@ -660,9 +657,8 @@ class FeatureUnion(Transform):
         for name, tfm in self.transformers:
             result = tfm.partial_fit_transform(X, y)
             flat, names = self._to_2d(result)
-            prefixed = [f"{name}__{n}" for n in names]
             parts.append(flat)
-            all_names.extend(prefixed)
+            all_names.extend(names)
 
         combined = np.concatenate(parts, axis=1)
         self._is_fitted = True
