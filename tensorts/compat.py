@@ -69,6 +69,7 @@ class SklearnWrapper(_BaseEstimator):
     def __init__(self, pipeline: "Pipeline", estimator: Any) -> None:
         self.pipeline = pipeline
         self.estimator = estimator
+        self._label_classes: np.ndarray | None = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -99,6 +100,12 @@ class SklearnWrapper(_BaseEstimator):
             y = Xt.y
         X_np = Xt.data.reshape(Xt.n_samples, -1)
         self.estimator.fit(X_np, y)
+        # Cache label encoder inverse mapping so predict() can decode back
+        self._label_classes = None
+        for _name, step in self.pipeline.steps:
+            if hasattr(step, "classes_") and hasattr(step, "_class_to_idx"):
+                self._label_classes = step.classes_
+                break
         return self
 
     def partial_fit(self, X: "TimeTensor", y=None, **kwargs) -> "SklearnWrapper":
@@ -108,6 +115,10 @@ class SklearnWrapper(_BaseEstimator):
             y = Xt.y
         X_np = Xt.data.reshape(Xt.n_samples, -1)
         self.estimator.partial_fit(X_np, y, **kwargs)
+        for _name, step in self.pipeline.steps:
+            if hasattr(step, "classes_") and hasattr(step, "_class_to_idx"):
+                self._label_classes = step.classes_
+                break
         return self
 
     def _aggregate_window_preds(self, preds: np.ndarray, Xt: "TimeTensor", n_original: int) -> np.ndarray:
@@ -131,7 +142,14 @@ class SklearnWrapper(_BaseEstimator):
         Xt = self.pipeline.transform(X)
         X_np = Xt.data.reshape(Xt.n_samples, -1)
         preds = self.estimator.predict(X_np)
-        return self._aggregate_window_preds(preds, Xt, X.n_samples)
+        preds = self._aggregate_window_preds(preds, Xt, X.n_samples)
+        # Decode integer predictions back to original labels if LabelEncoder was used
+        if self._label_classes is not None:
+            try:
+                preds = self._label_classes[preds.astype(int)]
+            except (IndexError, ValueError):
+                pass  # predictions already in original space
+        return preds
 
     def predict_proba(self, X: "TimeTensor") -> np.ndarray:
         Xt = self.pipeline.transform(X)
