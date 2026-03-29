@@ -1105,6 +1105,124 @@ test("Pipeline: StandardScaler → FeatureExtractor PER_SAMPLE", test_per_sample
 
 
 # =====================================================================
+# PART 6: Simplified API — scope-aware defaults
+# =====================================================================
+print()
+print("=" * 60)
+print("PART 6: Simplified API — scope-aware defaults")
+print("=" * 60)
+
+
+def test_per_sample_default_output_dims():
+    """PER_SAMPLE defaults output_dims to (Dim.FEATURE,) — no need to specify it."""
+    from tensorts import Dim, FeatureExtractor, Scope, TimeTensor
+
+    def cross_fn(x):
+        return np.array([np.mean(x), np.std(x)])
+
+    data = np.random.randn(5, 100, 3)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+
+    fe = FeatureExtractor(fn=cross_fn, scope=Scope.PER_SAMPLE, name="cross")
+    assert fe.output_dims == (Dim.FEATURE,), f"Expected (Dim.FEATURE,), got {fe.output_dims}"
+
+    fe.fit(ts)
+    result = fe.transform(ts)
+    assert result.shape == (5, 2), f"Expected (5, 2), got {result.shape}"
+    assert Dim.FEATURE in result.dims
+    print(f"    PER_SAMPLE default: output_dims={fe.output_dims}, shape {ts.shape} → {result.shape}")
+
+
+test("PER_SAMPLE defaults output_dims to (Dim.FEATURE,)", test_per_sample_default_output_dims)
+
+
+def test_per_channel_default_output_dims():
+    """PER_CHANNEL defaults output_dims to (Dim.TIME,) — unchanged behavior."""
+    from tensorts import Dim, FeatureExtractor, Scope
+
+    fe = FeatureExtractor(fn=lambda x: x[:10], scope=Scope.PER_CHANNEL, name="trunc")
+    assert fe.output_dims == (Dim.TIME,), f"Expected (Dim.TIME,), got {fe.output_dims}"
+
+
+test("PER_CHANNEL defaults output_dims to (Dim.TIME,)", test_per_channel_default_output_dims)
+
+
+def test_multi_fn_accepts_feature_output_dims():
+    """Multi-fn mode accepts explicit output_dims=(Dim.FEATURE,) without error."""
+    from tensorts import Dim, FeatureExtractor, TimeTensor
+
+    data = np.random.randn(4, 50, 2)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL))
+
+    fe = FeatureExtractor(
+        functions=[("mean", np.mean), ("std", np.std)],
+        output_dims=(Dim.FEATURE,),
+    )
+    fe.fit(ts)
+    result = fe.transform(ts)
+    assert result.shape == (4, 2, 2), f"Expected (4, 2, 2), got {result.shape}"
+    print(f"    multi-fn + explicit FEATURE: {ts.shape} → {result.shape}")
+
+
+test("Multi-fn accepts output_dims=(Dim.FEATURE,)", test_multi_fn_accepts_feature_output_dims)
+
+
+def test_multi_fn_rejects_invalid_output_dims():
+    """Multi-fn mode still rejects invalid output_dims."""
+    from tensorts import Dim, FeatureExtractor
+
+    try:
+        FeatureExtractor(
+            functions=[("mean", np.mean)],
+            output_dims=(Dim.FREQUENCY,),
+        )
+        raise AssertionError("Should have raised ValueError")
+    except ValueError as e:
+        assert "ignored in multi-fn mode" in str(e)
+        print(f"    correctly rejected: {e}")
+
+
+test("Multi-fn rejects invalid output_dims", test_multi_fn_rejects_invalid_output_dims)
+
+
+def test_clone_preserves_resolved_output_dims():
+    """sklearn clone() preserves the resolved output_dims value."""
+    from sklearn.base import clone
+
+    from tensorts import Dim, FeatureExtractor, Scope
+
+    def cross_fn(x):
+        return np.array([np.mean(x)])
+
+    fe = FeatureExtractor(fn=cross_fn, scope=Scope.PER_SAMPLE, name="cross")
+    assert fe.output_dims == (Dim.FEATURE,)
+
+    cloned = clone(fe)
+    assert cloned.output_dims == (Dim.FEATURE,), f"clone lost output_dims: {cloned.output_dims}"
+    print(f"    clone output_dims: {cloned.output_dims}")
+
+
+test("clone() preserves resolved output_dims", test_clone_preserves_resolved_output_dims)
+
+
+def test_explicit_output_dims_still_works():
+    """Explicit output_dims overrides the scope-based default."""
+    from tensorts import Dim, FeatureExtractor, Scope
+
+    # PER_SAMPLE with scalar output — explicitly set ()
+    fe = FeatureExtractor(fn=lambda x: np.mean(x), scope=Scope.PER_SAMPLE, output_dims=(), name="scalar")
+    assert fe.output_dims == (), f"Expected (), got {fe.output_dims}"
+
+    # PER_CHANNEL with FREQUENCY — explicitly set
+    fe2 = FeatureExtractor(fn=lambda x: np.abs(np.fft.rfft(x)), scope=Scope.PER_CHANNEL, output_dims=(Dim.FREQUENCY,))
+    assert fe2.output_dims == (Dim.FREQUENCY,), f"Expected (Dim.FREQUENCY,), got {fe2.output_dims}"
+    print(f"    explicit scalar: {fe.output_dims}, explicit FREQUENCY: {fe2.output_dims}")
+
+
+test("Explicit output_dims overrides scope default", test_explicit_output_dims_still_works)
+
+
+# =====================================================================
 # Summary
 # =====================================================================
 print()
