@@ -919,7 +919,7 @@ def test_single_fn_per_sample_dense_vector():
     data = np.random.randn(5, 100, 4)
     ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["a", "b", "c", "d"])
 
-    fe = FeatureExtractor(fn=cross_channel_stats, scope=Scope.PER_SAMPLE, output_dims=(Dim.FEATURE,))
+    fe = FeatureExtractor(fn=cross_channel_stats, scope=Scope.PER_SAMPLE)
     fe.fit(ts)
     result = fe.transform(ts)
 
@@ -1091,7 +1091,7 @@ def test_per_sample_pipeline_integration():
     pipe = Pipeline(
         [
             ("scale", StandardScaler()),
-            ("fe", FeatureExtractor(fn=cross_channel_features, scope=Scope.PER_SAMPLE, output_dims=(Dim.FEATURE,))),
+            ("fe", FeatureExtractor(fn=cross_channel_features, scope=Scope.PER_SAMPLE)),
         ]
     )
     result = pipe.fit_transform(ts)
