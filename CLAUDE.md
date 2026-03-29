@@ -12,7 +12,7 @@ Tests use a custom harness (not pytest). Run each suite directly:
 
 ```bash
 python tests/test_tensorts.py                  # 62 tests — core + all transforms
-python tests/test_feature_extractor.py         # 39 tests — multi-fn extraction + flatten naming + PER_SAMPLE
+python tests/test_feature_extractor.py         # 45 tests — multi-fn extraction + flatten naming + PER_SAMPLE + simplified API
 python tests/test_function_transform.py        # 21 tests — stateful/stateless wrapping
 python tests/test_sklearn_compat_problems.py   # 4 end-to-end sklearn integration problems
 python tests/test_partial_fit.py               # 15 tests — incremental learning

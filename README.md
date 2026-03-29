@@ -36,7 +36,7 @@ Run the test suite to verify:
 
 ```bash
 python tests/test_tensorts.py                  # 62 tests
-python tests/test_feature_extractor.py         # 39 tests
+python tests/test_feature_extractor.py         # 45 tests
 python tests/test_function_transform.py        # 21 tests
 python tests/test_sklearn_compat_problems.py   # 4 real-world problems
 python tests/test_partial_fit.py               # 15 incremental learning tests
@@ -359,9 +359,9 @@ def cross_features(x):
     return np.array([sma, mag])
 
 fe = FeatureExtractor(
-    fn=cross_features, scope=Scope.PER_SAMPLE,
-    output_dims=(Dim.FEATURE,), name='cross',
+    fn=cross_features, scope=Scope.PER_SAMPLE, name='cross',
 )
+# output_dims defaults to (Dim.FEATURE,) for PER_SAMPLE
 # (B, T, C) → (B, 2)           — channels consumed, 2 features out
 # (B, W, T, C) → (B, W, 2)     — WINDOW preserved, per-window cross features
 ```
@@ -500,7 +500,6 @@ pipe = Pipeline([
         ('stats', make_statistical_extractor(['mean', 'std', 'rms'])),
         ('cross', FeatureExtractor(fn=cross_channel_features,
                                    scope=Scope.PER_SAMPLE,
-                                   output_dims=(Dim.FEATURE,),
                                    name='cross')),
     ])),
 ])
@@ -514,7 +513,6 @@ pipe = Pipeline([
         ('stats', make_statistical_extractor(['mean', 'std', 'rms'])),
         ('cross', FeatureExtractor(fn=cross_channel_features,
                                    scope=Scope.PER_SAMPLE,
-                                   output_dims=(Dim.FEATURE,),
                                    name='cross')),
     ])),
 ])
@@ -664,7 +662,6 @@ pipe = Pipeline([
         ('stats', make_statistical_extractor(['mean', 'std', 'rms', 'zcr'])),
         ('cross', FeatureExtractor(fn=cross_channel_features,
                                    scope=Scope.PER_SAMPLE,
-                                   output_dims=(Dim.FEATURE,),
                                    name='cross')),
     ])),
 ])
