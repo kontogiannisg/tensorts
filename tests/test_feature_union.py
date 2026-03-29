@@ -90,7 +90,6 @@ def test_mixed_scope_per_channel_and_per_sample():
                 FeatureExtractor(
                     fn=cross_channel_features,
                     scope=Scope.PER_SAMPLE,
-                    output_dims=(Dim.FEATURE,),
                     name="cross",
                 ),
             ),
@@ -191,7 +190,6 @@ def test_pipeline_with_feature_union():
                             FeatureExtractor(
                                 fn=acc_magnitude_stats,
                                 scope=Scope.PER_SAMPLE,
-                                output_dims=(Dim.FEATURE,),
                                 name="mag",
                             ),
                         ),
@@ -472,7 +470,6 @@ def test_har_full_pipeline():
                             FeatureExtractor(
                                 fn=cross_channel_features,
                                 scope=Scope.PER_SAMPLE,
-                                output_dims=(Dim.FEATURE,),
                                 name="cross",
                             ),
                         ),
@@ -579,7 +576,6 @@ def test_4d_mixed_scope():
                             FeatureExtractor(
                                 fn=cross_features,
                                 scope=Scope.PER_SAMPLE,
-                                output_dims=(Dim.FEATURE,),
                                 name="cross",
                             ),
                         ),
