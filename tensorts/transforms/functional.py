@@ -839,29 +839,42 @@ class FeatureExtractor(Transform):
     # ------------------------------------------------------------------
 
     def _transform_per_sample_dense(self, X: TimeTensor) -> TimeTensor:
-        """Single-fn PER_SAMPLE: pass (T, C) per sample to fn."""
+        """Single-fn PER_SAMPLE: pass (T, C) per sample to fn.
+
+        For 4D+ input (e.g. after SlidingWindow), axes other than the
+        consumed TIME and CHANNEL are treated as leading axes and preserved.
+        The function receives ``(T, C)`` for each leading-axis combination.
+        """
         data = X.data
-        b_ax = X.axis(Dim.BATCH) if X.has_dim(Dim.BATCH) else 0
+        consumed_ax = X.axis(self.input_dim)
         ch_dim = X._find_channel_dim(X.schema)
         ch_ax = X.axis(ch_dim) if ch_dim is not None else data.ndim - 1
-        B = data.shape[b_ax]
 
-        other_axes = [i for i in range(data.ndim) if i not in (b_ax, ch_ax)]
-        perm = [b_ax] + other_axes + [ch_ax]
+        # Everything except consumed (TIME) and channel is a leading axis
+        leading_axes = [i for i in range(data.ndim) if i not in (consumed_ax, ch_ax)]
+        perm = leading_axes + [consumed_ax, ch_ax]
         transposed = np.transpose(data, perm)
-        T_merged = int(np.prod(transposed.shape[1:-1]))
-        C = transposed.shape[-1]
-        flat = transposed.reshape(B, T_merged, C)
 
-        results = [self._call_fn(flat[i]) for i in range(B)]
+        leading_shape = transposed.shape[: len(leading_axes)]
+        T = transposed.shape[-2]
+        C = transposed.shape[-1]
+        N = int(np.prod(leading_shape)) if leading_shape else 1
+        flat = transposed.reshape(N, T, C)
+
+        results = [self._call_fn(flat[i]) for i in range(N)]
         out = np.stack(results, axis=0)
 
-        new_dims = (Dim.BATCH,) + self.output_dims
+        # Restore leading dims
+        out_shape = leading_shape + out.shape[1:]
+        out = out.reshape(out_shape)
+
+        leading_dims = tuple(X.dims[i] for i in leading_axes)
+        new_dims = leading_dims + self.output_dims
+
         # Build feature names — PER_SAMPLE consumes channels, so store names
         meta = dict(X.metadata)
         fn_name = self.name or "feat"
         if len(self.output_dims) == 0:
-            # Scalar output: (B,) — one feature per sample
             meta["_feature_names"] = [fn_name]
             return TimeTensor(data=out, dims=new_dims, y=X.y, metadata=meta)
         K = out.shape[-1] if out.ndim > 1 else 1
@@ -908,35 +921,44 @@ class FeatureExtractor(Transform):
     # ------------------------------------------------------------------
 
     def _transform_multi_per_sample_dense(self, X: TimeTensor) -> TimeTensor:
-        """Multi-fn PER_SAMPLE: pass (T, C) per sample to each function."""
+        """Multi-fn PER_SAMPLE: pass (T, C) per sample to each function.
+
+        Leading axes (e.g. BATCH, WINDOW) are preserved; TIME and CHANNEL
+        are consumed by the functions.
+        """
         data = X.data
-        b_ax = X.axis(Dim.BATCH) if X.has_dim(Dim.BATCH) else 0
+        consumed_ax = X.axis(self.input_dim)
         ch_dim = X._find_channel_dim(X.schema)
         ch_ax = X.axis(ch_dim) if ch_dim is not None else data.ndim - 1
-        B = data.shape[b_ax]
 
-        other_axes = [i for i in range(data.ndim) if i not in (b_ax, ch_ax)]
-        perm = [b_ax] + other_axes + [ch_ax]
+        leading_axes = [i for i in range(data.ndim) if i not in (consumed_ax, ch_ax)]
+        perm = leading_axes + [consumed_ax, ch_ax]
         transposed = np.transpose(data, perm)
-        T_merged = int(np.prod(transposed.shape[1:-1]))
+
+        leading_shape = transposed.shape[: len(leading_axes)]
+        T = transposed.shape[-2]
         C = transposed.shape[-1]
-        flat = transposed.reshape(B, T_merged, C)
+        N = int(np.prod(leading_shape)) if leading_shape else 1
+        flat = transposed.reshape(N, T, C)
 
         fn_outputs: list[np.ndarray] = []
         feature_names: list[str] = []
         for fname, fn, kwargs in self._functions_normalized:
             probe = np.asarray(fn(flat[0], **kwargs)).ravel()
             K_i = probe.size
-            fn_out = np.empty((B, K_i), dtype=probe.dtype)
+            fn_out = np.empty((N, K_i), dtype=probe.dtype)
             fn_out[0] = probe
-            for n in range(1, B):
+            for n in range(1, N):
                 fn_out[n] = np.asarray(fn(flat[n], **kwargs)).ravel()
             fn_outputs.append(fn_out)
             for k in range(K_i):
                 feature_names.append(fname if K_i == 1 else f"{fname}__{k}")
 
-        combined = np.concatenate(fn_outputs, axis=1)  # (B, K_total)
-        new_dims = (Dim.BATCH, Dim.FEATURE)
+        combined = np.concatenate(fn_outputs, axis=1)  # (N, K_total)
+        combined = combined.reshape(leading_shape + (combined.shape[-1],))
+
+        leading_dims = tuple(X.dims[i] for i in leading_axes)
+        new_dims = leading_dims + (Dim.FEATURE,)
         self.feature_names_out_ = feature_names
         meta = {**X.metadata, "_feature_names": feature_names}
         return TimeTensor(

@@ -497,6 +497,241 @@ test("HAR pipeline: Scaler → FeatureUnion(stats+cross) → RF", test_har_full_
 
 
 # =====================================================================
+# PART 5: 4D input (SlidingWindow + FeatureUnion)
+# =====================================================================
+print()
+print("=" * 60)
+print("PART 5: 4D input (SlidingWindow + FeatureUnion)")
+print("=" * 60)
+
+
+def test_4d_two_extractors():
+    """Two per-channel extractors after SlidingWindow(flatten_batch=False)."""
+    from tensorts import Dim, FeatureUnion, Pipeline, StandardScaler, TimeTensor, make_statistical_extractor
+    from tensorts.transforms.temporal import SlidingWindow
+
+    data = np.random.randn(4, 32, 3)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["x", "y", "z"])
+
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("window", SlidingWindow(size=5, stride=2, flatten_batch=False)),
+            (
+                "features",
+                FeatureUnion(
+                    [
+                        ("s1", make_statistical_extractor(["mean", "std"])),
+                        ("s2", make_statistical_extractor(["rms"])),
+                    ]
+                ),
+            ),
+        ]
+    )
+    result = pipe.fit_transform(ts)
+
+    assert Dim.WINDOW in result.dims, f"WINDOW dim not preserved: {result.dims}"
+    # 14 windows, (2+1) stats × 3 channels = 9
+    assert result.shape == (4, 14, 9), f"Expected (4, 14, 9), got {result.shape}"
+    assert result.dims == (Dim.BATCH, Dim.WINDOW, Dim.FEATURE)
+    names = list(result.channels.names)
+    assert len(names) == 9
+    assert "mean__x" in names
+    print(f"    shape: {result.shape}, features: {names[:4]}...")
+
+
+test("4D: two per-channel extractors", test_4d_two_extractors)
+
+
+def test_4d_mixed_scope():
+    """4D: per-channel stats + per-sample cross-channel features."""
+    from tensorts import (
+        Dim,
+        FeatureExtractor,
+        FeatureUnion,
+        Pipeline,
+        Scope,
+        StandardScaler,
+        TimeTensor,
+        make_statistical_extractor,
+    )
+    from tensorts.transforms.temporal import SlidingWindow
+
+    def cross_features(x):
+        mag = float(np.mean(np.linalg.norm(x, axis=1)))
+        sma = float(np.mean(np.sum(np.abs(x), axis=1)))
+        return np.array([mag, sma])
+
+    data = np.random.randn(4, 32, 3)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["a", "b", "c"])
+
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("window", SlidingWindow(size=5, stride=2, flatten_batch=False)),
+            (
+                "features",
+                FeatureUnion(
+                    [
+                        ("stats", make_statistical_extractor(["mean"])),
+                        (
+                            "cross",
+                            FeatureExtractor(
+                                fn=cross_features,
+                                scope=Scope.PER_SAMPLE,
+                                output_dims=(Dim.FEATURE,),
+                                name="cross",
+                            ),
+                        ),
+                    ]
+                ),
+            ),
+        ]
+    )
+    result = pipe.fit_transform(ts)
+
+    # 1 stat × 3 ch + 2 cross = 5 per window
+    assert result.shape == (4, 14, 5), f"Expected (4, 14, 5), got {result.shape}"
+    names = list(result.channels.names)
+    assert "cross_0" in names
+    print(f"    shape: {result.shape}, features: {names}")
+
+
+test("4D: mixed scope per-channel + per-sample", test_4d_mixed_scope)
+
+
+def test_4d_scalar_per_sample():
+    """4D: scalar PER_SAMPLE output alongside per-channel stats."""
+    from tensorts import (
+        Dim,
+        FeatureExtractor,
+        FeatureUnion,
+        Pipeline,
+        Scope,
+        StandardScaler,
+        TimeTensor,
+        make_statistical_extractor,
+    )
+    from tensorts.transforms.temporal import SlidingWindow
+
+    def total_energy(x):
+        return float(np.sum(x**2))
+
+    data = np.random.randn(4, 32, 3)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["a", "b", "c"])
+
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("window", SlidingWindow(size=5, stride=2, flatten_batch=False)),
+            (
+                "features",
+                FeatureUnion(
+                    [
+                        ("stats", make_statistical_extractor(["mean"])),
+                        (
+                            "energy",
+                            FeatureExtractor(
+                                fn=total_energy,
+                                scope=Scope.PER_SAMPLE,
+                                output_dims=(),
+                                name="energy",
+                            ),
+                        ),
+                    ]
+                ),
+            ),
+        ]
+    )
+    result = pipe.fit_transform(ts)
+
+    # 1 × 3 + 1 = 4 per window
+    assert result.shape == (4, 14, 4), f"Expected (4, 14, 4), got {result.shape}"
+    assert "energy" in list(result.channels.names)
+    print(f"    shape: {result.shape}, features: {list(result.channels.names)}")
+
+
+test("4D: scalar PER_SAMPLE + per-channel stats", test_4d_scalar_per_sample)
+
+
+def test_4d_multi_fn_per_sample():
+    """4D: multi-fn PER_SAMPLE alongside per-channel stats."""
+    from tensorts import (
+        Dim,
+        FeatureExtractor,
+        FeatureUnion,
+        Pipeline,
+        Scope,
+        StandardScaler,
+        TimeTensor,
+        make_statistical_extractor,
+    )
+    from tensorts.transforms.temporal import SlidingWindow
+
+    def mag_fn(x):
+        return float(np.linalg.norm(x).mean())
+
+    def sma_fn(x):
+        return float(np.sum(np.abs(x)))
+
+    data = np.random.randn(4, 32, 6)
+    ts = TimeTensor(data, dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL), channels=["ax", "ay", "az", "gx", "gy", "gz"])
+
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("window", SlidingWindow(size=5, stride=2, flatten_batch=False)),
+            (
+                "features",
+                FeatureUnion(
+                    [
+                        ("stats", make_statistical_extractor(["mean"])),
+                        (
+                            "cross",
+                            FeatureExtractor(
+                                functions=[("mag", mag_fn), ("sma", sma_fn)],
+                                scope=Scope.PER_SAMPLE,
+                                name="cross",
+                            ),
+                        ),
+                    ]
+                ),
+            ),
+        ]
+    )
+    result = pipe.fit_transform(ts)
+
+    # 1 × 6 + 2 = 8 per window
+    assert result.shape == (4, 14, 8), f"Expected (4, 14, 8), got {result.shape}"
+    names = list(result.channels.names)
+    assert "mag" in names
+    assert "sma" in names
+    print(f"    shape: {result.shape}, features: {names}")
+
+
+test("4D: multi-fn PER_SAMPLE + per-channel stats", test_4d_multi_fn_per_sample)
+
+
+def test_4d_incompatible_shapes_raises():
+    """Mixing windowed and non-windowed sub-transforms should raise."""
+    from tensorts import Dim, FeatureUnion
+
+    try:
+        FeatureUnion._validate_leading(
+            [
+                ("stats", (4, 14), (Dim.BATCH, Dim.WINDOW)),
+                ("cross", (4,), (Dim.BATCH,)),
+            ]
+        )
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "incompatible leading shapes" in str(e)
+
+
+test("4D: incompatible leading shapes raises ValueError", test_4d_incompatible_shapes_raises)
+
+
+# =====================================================================
 # Summary
 # =====================================================================
 print()
