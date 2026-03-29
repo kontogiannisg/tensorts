@@ -350,6 +350,9 @@ class StatefulFunctionTransform(Transform):
 # ======================================================================
 
 
+_OUTPUT_DIMS_UNSET = object()
+
+
 class FeatureExtractor(Transform):
     """Extract features that change dimensionality, with flexible scope.
 
@@ -419,7 +422,9 @@ class FeatureExtractor(Transform):
         Which axis the function(s) consume.  Default: ``Dim.TIME``.
 
     output_dims : tuple of Dim
-        *Single-fn mode only.*  Axes that replace ``input_dim``:
+        *Single-fn mode only.*  Axes that replace ``input_dim``.  Defaults to
+        ``(Dim.FEATURE,)`` when ``scope=PER_SAMPLE``, or ``(Dim.TIME,)``
+        when ``scope=PER_CHANNEL``.  Common values:
 
         - ``(Dim.TIME,)`` — same axis, different length
         - ``(Dim.FREQUENCY, Dim.TIME)`` — e.g. spectrogram
@@ -509,8 +514,8 @@ class FeatureExtractor(Transform):
         FeatureExtractor(
             fn=cross_features,
             scope=Scope.PER_SAMPLE,
-            output_dims=(Dim.FEATURE,),
         )
+        # output_dims defaults to (Dim.FEATURE,) for PER_SAMPLE
         # (B, T, C) → (B, 2)      — channels consumed, 2 features out
         # (B, W, T, C) → (B, W, 2) — per window, WINDOW preserved
 
@@ -539,8 +544,7 @@ class FeatureExtractor(Transform):
         FeatureUnion([
             ("stats", make_statistical_extractor(["mean", "std"])),
             ("cross", FeatureExtractor(fn=cross_features,
-                                       scope=Scope.PER_SAMPLE,
-                                       output_dims=(Dim.FEATURE,))),
+                                       scope=Scope.PER_SAMPLE)),
         ])
         # (B, T, C) → (B, 2*C + 2)
 
@@ -550,8 +554,7 @@ class FeatureExtractor(Transform):
             ("features", FeatureUnion([
                 ("stats", make_statistical_extractor(["mean", "std"])),
                 ("cross", FeatureExtractor(fn=cross_features,
-                                           scope=Scope.PER_SAMPLE,
-                                           output_dims=(Dim.FEATURE,))),
+                                           scope=Scope.PER_SAMPLE)),
             ])),
         ])
         # (B, T, C) → (B, W, 2*C + 2) — WINDOW preserved for Conv1D/LSTM
@@ -563,7 +566,7 @@ class FeatureExtractor(Transform):
         self,
         fn: Callable | None = None,
         input_dim: Dim = Dim.TIME,
-        output_dims: tuple[Dim, ...] = (Dim.TIME,),
+        output_dims: tuple[Dim, ...] | object = _OUTPUT_DIMS_UNSET,
         fn_args: tuple = (),
         fn_kwargs: dict[str, Any] | None = None,
         name: str | None = None,
@@ -573,7 +576,10 @@ class FeatureExtractor(Transform):
         super().__init__()
         self.fn = fn
         self.input_dim = input_dim
-        self.output_dims = output_dims
+        if output_dims is _OUTPUT_DIMS_UNSET:
+            self.output_dims = (Dim.FEATURE,) if scope == Scope.PER_SAMPLE else (Dim.TIME,)
+        else:
+            self.output_dims = output_dims
         self.fn_args = fn_args
         self.fn_kwargs = {} if fn_kwargs is None else fn_kwargs
         self.name = name
@@ -595,12 +601,10 @@ class FeatureExtractor(Transform):
         if functions is not None:
             if len(functions) == 0:
                 raise ValueError("'functions' must not be empty.")
-            if self.output_dims != (Dim.TIME,):
-                # output_dims was explicitly set alongside functions — that's an error
-                # (We allow the default value through because users may not set it at all)
+            if self.output_dims not in ((Dim.TIME,), (Dim.FEATURE,)):
                 raise ValueError(
-                    "'output_dims' is only used in single-fn mode. "
-                    "In multi-fn mode the output axis is always Dim.FEATURE."
+                    "'output_dims' is ignored in multi-fn mode (output is always Dim.FEATURE). "
+                    "Remove output_dims or set it to (Dim.FEATURE,)."
                 )
             # Normalise to 3-tuples (name, fn, kwargs)
             normalised = []
@@ -630,7 +634,7 @@ class FeatureExtractor(Transform):
         # Guard output_dims check: if only functions is being set (not output_dims),
         # reset output_dims to default first to avoid spurious conflict error.
         if "functions" in params and "output_dims" not in params:
-            self.output_dims = (Dim.TIME,)
+            self.output_dims = (Dim.FEATURE,) if self.scope == Scope.PER_SAMPLE else (Dim.TIME,)
         self._setup_mode()
         return self
 
