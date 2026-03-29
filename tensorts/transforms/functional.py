@@ -464,6 +464,11 @@ class FeatureExtractor(Transform):
 
     - Dense and ragged inputs are supported in all mode/scope combinations.
 
+    - **4D windowed input**: With `(B, W, T, C)` from
+      ``SlidingWindow(flatten_batch=False)``, both PER_CHANNEL and PER_SAMPLE
+      treat WINDOW as a leading axis.  Each function sees one window's
+      ``(T,)`` or ``(T, C)`` independently, and the WINDOW dim is preserved.
+
     Examples
     --------
     **Single-fn, PER_CHANNEL** — mel spectrogram::
@@ -474,7 +479,7 @@ class FeatureExtractor(Transform):
             output_dims=(Dim.FREQUENCY, Dim.TIME),
         )
         # (B, T, C) → (B, 64, FRAMES, C)
-        # (B, K, T, C) → (B, K, 64, FRAMES, C)   windowed input works too
+        # (B, W, T, C) → (B, W, 64, FRAMES, C)   windowed input works too
 
     **Single-fn, PER_CHANNEL** — scalar energy per channel::
 
@@ -491,7 +496,8 @@ class FeatureExtractor(Transform):
             scope=Scope.PER_SAMPLE,
             output_dims=(Dim.TIME,),
         )
-        # (B, T, 3) → (B, T)  — channels consumed
+        # (B, T, 3) → (B, T)    — channels consumed
+        # (B, W, T, 3) → (B, W, T)   — per window, channels consumed
 
     **Single-fn, PER_SAMPLE** — cross-channel feature vector::
 
@@ -505,14 +511,16 @@ class FeatureExtractor(Transform):
             scope=Scope.PER_SAMPLE,
             output_dims=(Dim.FEATURE,),
         )
-        # (B, T, C) → (B, 2)  — channels consumed, 2 features out
+        # (B, T, C) → (B, 2)      — channels consumed, 2 features out
+        # (B, W, T, C) → (B, W, 2) — per window, WINDOW preserved
 
     **Multi-fn, PER_CHANNEL** — statistical summary::
 
         FeatureExtractor(
             functions=[("mean", np.mean), ("std", np.std)],
         )
-        # (B, T, C) → (B, 2, C)  with Dim.FEATURE axis
+        # (B, T, C) → (B, 2, C)      with Dim.FEATURE axis
+        # (B, W, T, C) → (B, W, 2, C) — windowed input preserved
 
     **Multi-fn, PER_SAMPLE** — cross-channel statistics::
 
@@ -520,19 +528,33 @@ class FeatureExtractor(Transform):
             functions=[("sma", sma_fn), ("corr", correlation_fn)],
             scope=Scope.PER_SAMPLE,
         )
-        # (B, T, C) → (B, 2)  — channels consumed
+        # (B, T, C) → (B, 2)      — channels consumed
+        # (B, W, T, C) → (B, W, 2) — per window
 
-    **Combining scopes with FeatureUnion**::
+    **FeatureUnion — combine scopes, including 4D windowed**::
 
-        from tensorts import FeatureUnion
+        from tensorts import FeatureUnion, SlidingWindow
 
+        # 3D: standard feature extraction for ML
         FeatureUnion([
             ("stats", make_statistical_extractor(["mean", "std"])),
             ("cross", FeatureExtractor(fn=cross_features,
                                        scope=Scope.PER_SAMPLE,
                                        output_dims=(Dim.FEATURE,))),
         ])
-        # Runs both on same input, concatenates: (B, 2*C + 2)
+        # (B, T, C) → (B, 2*C + 2)
+
+        # 4D: rolling features for temporal DL
+        Pipeline([
+            ("window", SlidingWindow(size=25, stride=5, flatten_batch=False)),
+            ("features", FeatureUnion([
+                ("stats", make_statistical_extractor(["mean", "std"])),
+                ("cross", FeatureExtractor(fn=cross_features,
+                                           scope=Scope.PER_SAMPLE,
+                                           output_dims=(Dim.FEATURE,))),
+            ])),
+        ])
+        # (B, T, C) → (B, W, 2*C + 2) — WINDOW preserved for Conv1D/LSTM
     """
 
     supports_ragged = True

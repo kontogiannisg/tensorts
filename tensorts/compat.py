@@ -46,6 +46,15 @@ class SklearnWrapper(_BaseEstimator):
     The wrapper's fit/predict/score methods accept TimeTensor directly —
     sklearn CV splitters work because TimeTensor supports batch-axis indexing.
 
+    Handles two common y-mismatch scenarios automatically:
+
+    - **LabelEncoder**: when the pipeline encodes string labels to integers,
+      ``predict()`` decodes predictions back to the original label space so
+      sklearn scorers (including ``scoring='accuracy'``) compare like with like.
+    - **SlidingWindow**: when ``flatten_batch=True`` expands B samples into
+      B×K windows, ``predict()`` aggregates window-level predictions back to
+      sample level, and ``score()`` uses the expanded ``Xt.y`` for evaluation.
+
     Parameters
     ----------
     pipeline : tensorts Pipeline
@@ -56,14 +65,15 @@ class SklearnWrapper(_BaseEstimator):
 
     Examples
     --------
-    # cross_val_score
-    wrapper = SklearnWrapper(pipeline, RandomForestClassifier())
-    scores = cross_val_score(wrapper, X, y, cv=StratifiedKFold(5))
+    # cross_val_score with string labels
+    pipe = Pipeline([('enc', LabelEncoder()), ('scaler', StandardScaler()), ...])
+    wrapper = SklearnWrapper(pipe, RandomForestClassifier())
+    scores = cross_val_score(wrapper, X, y=X.y, cv=StratifiedKFold(5), scoring='accuracy')
 
     # GridSearchCV
     param_grid = {"pipeline__scaler__eps": [1e-6, 1e-8], "estimator__n_estimators": [50, 100]}
     gs = GridSearchCV(wrapper, param_grid, cv=5)
-    gs.fit(X, y)
+    gs.fit(X, y=X.y)
     """
 
     def __init__(self, pipeline: "Pipeline", estimator: Any) -> None:

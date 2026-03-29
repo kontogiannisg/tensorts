@@ -40,7 +40,7 @@ python tests/test_feature_extractor.py         # 39 tests
 python tests/test_function_transform.py        # 21 tests
 python tests/test_sklearn_compat_problems.py   # 4 real-world problems
 python tests/test_partial_fit.py               # 15 incremental learning tests
-python tests/test_feature_union.py            # 13 parallel extraction tests
+python tests/test_feature_union.py            # 18 parallel extraction + 4D windowed tests
 ```
 
 ---
@@ -203,9 +203,11 @@ Transforms declare their operational scope:
 
 | Scope | fn receives | Example use |
 |-------|------------|-------------|
-| `PER_CHANNEL` | 1-D vector `(T,)` per channel | scalers, filters |
-| `PER_SAMPLE` | 2-D matrix `(T, C)` per sample | per-sample normalization |
+| `PER_CHANNEL` | 1-D vector `(T,)` per channel | scalers, filters, per-channel stats |
+| `PER_SAMPLE` | 2-D matrix `(T, C)` per sample | cross-channel features (SMA, magnitude), per-sample normalization |
 | `GLOBAL` | full tensor | clipping, FFT over entire batch |
+
+With 4D windowed input `(B, W, T, C)`, both `PER_CHANNEL` and `PER_SAMPLE` automatically treat `WINDOW` as a leading axis — each function sees one window's `(T,)` or `(T, C)` independently.
 
 ### Preprocessing
 
@@ -327,16 +329,16 @@ Xt_train = scaler.transform(train)
 Xt_test  = scaler.transform(test)  # uses train statistics — no leakage
 ```
 
-### FeatureExtractor — change dimensionality per channel
+### FeatureExtractor — change dimensionality
 
-`FeatureExtractor` is for functions that **change the number of axes** for each channel. It operates in two modes:
+`FeatureExtractor` is for functions that **change the number of axes**. It operates in two modes and two scopes:
 
 #### Single-fn mode — one function, arbitrary output shape
 
 ```python
-from tensorts import FeatureExtractor, Dim
+from tensorts import FeatureExtractor, Dim, Scope
 
-# Spectrogram: (T,) → (FREQ, T')   TIME is replaced by FREQUENCY + TIME
+# PER_CHANNEL: fn receives (T,) per channel
 fe = FeatureExtractor(
     fn=compute_mel,
     input_dim=Dim.TIME,
@@ -347,20 +349,29 @@ fe = FeatureExtractor(
 # (B, W, T, C) → (B, W, FREQ, T', C)  — windowed input works automatically
 
 # Scalar: (T,) → scalar   TIME axis removed
-energy = FeatureExtractor(
-    fn=lambda x: np.sum(x**2),
-    input_dim=Dim.TIME,
-    output_dims=(),     # empty tuple = scalar
-)
+energy = FeatureExtractor(fn=lambda x: np.sum(x**2), output_dims=())
 # (B, T, C) → (B, C)
+
+# PER_SAMPLE: fn receives (T, C) — cross-channel features
+def cross_features(x):
+    sma = float(np.mean(np.sum(np.abs(x), axis=1)))
+    mag = float(np.mean(np.linalg.norm(x, axis=1)))
+    return np.array([sma, mag])
+
+fe = FeatureExtractor(
+    fn=cross_features, scope=Scope.PER_SAMPLE,
+    output_dims=(Dim.FEATURE,), name='cross',
+)
+# (B, T, C) → (B, 2)           — channels consumed, 2 features out
+# (B, W, T, C) → (B, W, 2)     — WINDOW preserved, per-window cross features
 ```
 
 #### Multi-fn mode — multiple functions stacked along a FEATURE axis
 
-This replaces the old `StatisticalFeatures` and `FrameFeatureBank`. Each function receives a 1-D vector and must return a scalar or 1-D array. Results are concatenated along a new `Dim.FEATURE` axis.
+Each function receives a 1-D vector (PER_CHANNEL) or 2-D matrix (PER_SAMPLE) and must return a scalar or 1-D array. Results are concatenated along a new `Dim.FEATURE` axis.
 
 ```python
-# Statistical summary
+# PER_CHANNEL: statistical summary
 fe = FeatureExtractor(
     functions=[
         ('mean',   np.mean),
@@ -371,6 +382,14 @@ fe = FeatureExtractor(
 )
 # (B, T, C) → (B, 3, C)       feature_names_out_: ['mean', 'std', 'energy']
 # (B, W, T, C) → (B, W, 3, C) — windowed input works automatically
+
+# PER_SAMPLE: cross-channel statistics
+fe = FeatureExtractor(
+    functions=[('sma', sma_fn), ('mag', magnitude_fn)],
+    scope=Scope.PER_SAMPLE,
+)
+# (B, T, C) → (B, 2)           feature_names_out_: ['sma', 'mag']
+# (B, W, T, C) → (B, W, 2)     WINDOW preserved
 
 # Mix scalar + vector outputs (K_total = sum of all output sizes)
 fe = FeatureExtractor(
@@ -463,6 +482,8 @@ cs = ChannelSelect('eeg_*', BandpassFilter(low=0.5, high=40, sampling_rate=256))
 
 ### FeatureUnion — parallel extraction with mixed scopes
 
+Runs multiple transforms on the same input and concatenates their outputs along `Dim.FEATURE`. When input is 4D (e.g., after `SlidingWindow`), leading dims like `WINDOW` are automatically preserved.
+
 ```python
 from tensorts import FeatureUnion, FeatureExtractor, Scope, make_statistical_extractor
 
@@ -472,6 +493,7 @@ def cross_channel_features(x):
     mag = float(np.mean(np.linalg.norm(x, axis=1)))
     return np.array([sma, mag])
 
+# Standard (3D) — feature extraction for ML
 pipe = Pipeline([
     ('scaler',   StandardScaler()),
     ('features', FeatureUnion([
@@ -482,15 +504,33 @@ pipe = Pipeline([
                                    name='cross')),
     ])),
 ])
-# Each sub-transform runs on the same input; outputs are flattened and concatenated.
-# Result: (B, 3*C + 2) with descriptive feature names.
+# (B, T, C) → (B, 3*C + 2) with descriptive feature names
+
+# 4D windowed — rolling features for temporal DL
+pipe = Pipeline([
+    ('scaler',   StandardScaler()),
+    ('window',   SlidingWindow(size=5, stride=1, flatten_batch=False)),
+    ('features', FeatureUnion([
+        ('stats', make_statistical_extractor(['mean', 'std', 'rms'])),
+        ('cross', FeatureExtractor(fn=cross_channel_features,
+                                   scope=Scope.PER_SAMPLE,
+                                   output_dims=(Dim.FEATURE,),
+                                   name='cross')),
+    ])),
+])
+# (B, T, C) → (B, W, 3*C + 2) — WINDOW axis preserved for Conv1D/LSTM
 ```
+
+All sub-transforms must agree on leading dims. Mixing windowed `(B, W, ...)` and non-windowed `(B, ...)` outputs raises a clear `ValueError`.
 
 ---
 
 ## sklearn integration via SklearnWrapper
 
-`SklearnWrapper` bridges a tensorts `Pipeline` with sklearn CV tools. It handles the `y` mismatch that arises when `SlidingWindow` expands samples into windows.
+`SklearnWrapper` bridges a tensorts `Pipeline` with sklearn CV tools. It handles two `y` mismatch scenarios automatically:
+
+- **LabelEncoder**: when the pipeline encodes string labels to integers, `predict()` decodes predictions back to original labels so sklearn scorers compare like with like.
+- **SlidingWindow**: when windowing expands B samples into B×K windows, the wrapper uses `Xt.y` for the expanded label count and aggregates window-level predictions back to sample level.
 
 ```python
 from tensorts import SklearnWrapper
@@ -520,7 +560,7 @@ gs.fit(X, y=X.y)
 print(gs.best_params_)
 ```
 
-**How it handles windowing**: when `SlidingWindow(flatten_batch=True)` expands B samples into B×K windows, `SklearnWrapper.fit()` uses `Xt.y` (the expanded labels) to fit the estimator. `predict()` averages window-level predictions back to sample level using `_window_counts` stored in metadata. `score()` uses `Xt.y` when sample counts differ.
+**How it handles y transformations**: `fit()` always uses the pipeline-transformed `Xt.y` for training, and `score()` does the same for evaluation. When `LabelEncoder` encodes string labels to integers, `predict()` inverse-transforms predictions back to the original label space — this is critical for `cross_val_score(scoring='accuracy')` where sklearn compares predictions against the original (un-encoded) labels. When `SlidingWindow(flatten_batch=True)` expands B samples into B×K windows, `predict()` averages window-level predictions back to sample level using `_window_counts` stored in metadata.
 
 ---
 
@@ -598,6 +638,41 @@ X_test  = pipe.transform(test)
 # 5 stats × 6 channels = 30 features per window
 print(X_train.shape)   # (n_windows, 30)
 print(X_train.y)       # window-level labels
+```
+
+### HAR — rolling features for 1D temporal deep learning
+
+```python
+from tensorts import (
+    TimeTensor, Dim, Pipeline, Scope, StandardScaler,
+    SlidingWindow, FeatureUnion, FeatureExtractor,
+    make_statistical_extractor, LabelEncoder,
+)
+
+def cross_channel_features(x):
+    """x is (T, C) per window — compute cross-channel features."""
+    acc_mag = float(np.mean(np.linalg.norm(x[:, :3], axis=1)))
+    gyro_mag = float(np.mean(np.linalg.norm(x[:, 3:], axis=1)))
+    sma = float(np.mean(np.sum(np.abs(x), axis=1)))
+    return np.array([acc_mag, gyro_mag, sma])
+
+pipe = Pipeline([
+    ('label_enc', LabelEncoder()),
+    ('scaler',    StandardScaler()),
+    ('window',    SlidingWindow(size=25, stride=5, flatten_batch=False)),
+    ('features',  FeatureUnion([
+        ('stats', make_statistical_extractor(['mean', 'std', 'rms', 'zcr'])),
+        ('cross', FeatureExtractor(fn=cross_channel_features,
+                                   scope=Scope.PER_SAMPLE,
+                                   output_dims=(Dim.FEATURE,),
+                                   name='cross')),
+    ])),
+])
+result = pipe.fit_transform(ts)
+# (7352, 128, 6) → (7352, 21, 27)
+#   21 windows (stride=5 over 128 timesteps with size=25)
+#   27 features per window: 4 stats × 6 channels + 3 cross-channel
+# Ready for Conv1d(in_channels=27, ...) or LSTM(input_size=27, ...)
 ```
 
 ### Audio — mel spectrogram pipeline
@@ -764,13 +839,17 @@ for train_fold, test_fold in kfold_temporal(ts, n_folds=5):
 | `LogTransform` | any | same | `log(x + eps)` elementwise |
 
 ### Functional
-| Transform | Role | Dim schema |
-|-----------|------|-----------|
-| `FunctionTransform` | Wrap stateless fn; preprocessing | **preserved** |
-| `StatefulFunctionTransform` | Wrap stateful fn pair (fit/transform) | **preserved** |
-| `FeatureExtractor` (single-fn) | One fn changes axes | `TIME` → `output_dims` |
-| `FeatureExtractor` (multi-fn) | N fns stacked | `TIME` → `FEATURE` |
-| `make_statistical_extractor()` | Factory for multi-fn stats | `TIME` → `FEATURE` |
+| Transform | Role | Dim schema | 4D support |
+|-----------|------|-----------|:---:|
+| `FunctionTransform` | Wrap stateless fn; preprocessing | **preserved** | yes |
+| `StatefulFunctionTransform` | Wrap stateful fn pair (fit/transform) | **preserved** | yes |
+| `FeatureExtractor` (single-fn, PER_CHANNEL) | One fn per channel | `TIME` → `output_dims`, CHANNEL kept | yes |
+| `FeatureExtractor` (single-fn, PER_SAMPLE) | One fn, all channels | `TIME` → `output_dims`, CHANNEL consumed | yes |
+| `FeatureExtractor` (multi-fn, PER_CHANNEL) | N fns per channel | `TIME` → `FEATURE`, CHANNEL kept | yes |
+| `FeatureExtractor` (multi-fn, PER_SAMPLE) | N fns, all channels | `TIME` → `FEATURE`, CHANNEL consumed | yes |
+| `make_statistical_extractor()` | Factory for multi-fn stats | `TIME` → `FEATURE` | yes |
+
+**4D support**: With windowed input `(B, W, T, C)` from `SlidingWindow(flatten_batch=False)`, all transforms treat `WINDOW` as a leading axis — each function processes one window independently, and the `WINDOW` dim is preserved in the output.
 
 ### Shape
 | Transform | Input | Output |
@@ -788,8 +867,8 @@ for train_fold, test_fold in kfold_temporal(ts, n_folds=5):
 | `Pipeline` | Sequential chain with named steps |
 | `ChannelTransform` | Different transforms per channel group |
 | `ChannelSelect` | Transform a subset; passthrough others |
-| `FeatureUnion` | Run transforms in parallel, concatenate outputs |
-| `SklearnWrapper` | Bridge to sklearn CV tools (supports `partial_fit`) |
+| `FeatureUnion` | Run transforms in parallel, concatenate outputs; preserves leading dims (WINDOW) with 4D input |
+| `SklearnWrapper` | Bridge to sklearn CV tools; handles LabelEncoder decode + SlidingWindow aggregation |
 
 ---
 
