@@ -515,7 +515,12 @@ class FeatureUnion(Transform):
 
     Each sub-transform receives the **same** input ``TimeTensor``.  Their
     outputs are flattened to 2-D ``(B, K_i)`` and horizontally concatenated
-    into a single ``(B, K_total)`` array with ``Dim.FEATURE``.
+    into a single feature array with ``Dim.FEATURE`` as the last axis.
+
+    When all sub-transforms share leading dims (e.g., ``BATCH, WINDOW``),
+    those are preserved and only trailing dims are flattened.  This allows
+    FeatureUnion to work naturally after ``SlidingWindow(flatten_batch=False)``
+    for temporal DL pipelines.
 
     This is the tensorts equivalent of sklearn's ``FeatureUnion`` and is
     designed for combining extractors with different scopes (e.g.,
@@ -549,41 +554,89 @@ class FeatureUnion(Transform):
                 raise ValueError(f"Duplicate transformer name: {name!r}.")
             names.add(name)
 
+    # Dims that are "trailing" — produced by feature extraction / channel axes.
+    # Everything before the first occurrence of one of these is a "leading" dim
+    # that FeatureUnion preserves (e.g., BATCH, WINDOW).
+    _TRAILING_DIMS = frozenset({Dim.FEATURE, Dim.CHANNEL, Dim.FREQUENCY})
+
     @staticmethod
-    def _to_2d(result: TimeTensor) -> tuple[np.ndarray, list[str]]:
-        """Flatten a transform result to (B, K) and return feature names."""
+    def _split_leading(result: TimeTensor) -> tuple[tuple[int, ...], tuple[Dim, ...]]:
+        """Find the boundary between leading (preserved) and trailing (flattened) dims.
+
+        Returns ``(leading_shape, leading_dims)``.  The trailing dims are
+        everything after ``leading_dims`` and will be collapsed into FEATURE.
+
+        When no trailing dim is found (e.g., scalar PER_SAMPLE output with
+        only BATCH or BATCH+WINDOW), all dims are treated as leading and the
+        caller will expand a trailing size-1 feature axis.
+        """
+        dims = result.dims
+        split = len(dims)  # default: everything is leading
+        for i, d in enumerate(dims):
+            if d in FeatureUnion._TRAILING_DIMS:
+                split = i
+                break
+        leading_dims = dims[:split]
+        leading_shape = result.data.shape[:split]
+        return leading_shape, leading_dims
+
+    @staticmethod
+    def _flatten_trailing(
+        result: TimeTensor,
+    ) -> tuple[np.ndarray, list[str], tuple[int, ...], tuple[Dim, ...]]:
+        """Flatten trailing (feature/channel) dims, preserve leading dims.
+
+        Returns ``(flat, names, leading_shape, leading_dims)`` where
+        ``flat`` has shape ``leading_shape + (K,)``.
+        """
         if result.is_ragged:
             raise ValueError(
                 "FeatureUnion requires all sub-transforms to produce dense output. "
                 "Apply windowing or padding before using FeatureUnion with ragged transforms."
             )
+        leading_shape, leading_dims = FeatureUnion._split_leading(result)
         data = result.data
-        B = data.shape[0]
-        flat = data.reshape(B, -1)
+        if leading_shape == data.shape:
+            # No trailing dims (scalar output) — expand a size-1 feature axis
+            flat = data.reshape(leading_shape + (1,))
+        else:
+            # Reshape to (*leading_shape, K) where K = product of trailing dims
+            flat = data.reshape(leading_shape + (-1,))
+        K = flat.shape[-1]
 
-        # Build feature names
+        # Build feature names for the K trailing features
         feature_names = result.metadata.get("_feature_names", None)
         channels = result.channels
 
         if feature_names is not None and channels is not None:
-            # Multi-fn per-channel: cross-product feature × channel
-            names = [f"{fn}__{ch}" for fn in feature_names for ch in channels.names]
-        elif feature_names is not None:
-            names = list(feature_names)
-        elif channels is not None:
-            n_per_ch = flat.shape[1] // len(channels.names) if len(channels.names) > 0 else flat.shape[1]
-            if n_per_ch > 1:
-                names = [f"f{j}__{ch}" for j in range(n_per_ch) for ch in channels.names]
-            else:
+            if len(feature_names) * len(channels.names) == K:
+                # Multi-fn per-channel: cross-product feature × channel
+                names = [f"{fn}__{ch}" for fn in feature_names for ch in channels.names]
+            elif len(feature_names) == K:
+                names = list(feature_names)
+            elif len(channels.names) == K:
                 names = list(channels.names)
+            else:
+                names = [f"f_{i}" for i in range(K)]
+        elif feature_names is not None:
+            if len(feature_names) == K:
+                names = list(feature_names)
+            else:
+                names = [f"f_{i}" for i in range(K)]
+        elif channels is not None:
+            if len(channels.names) == K:
+                names = list(channels.names)
+            else:
+                n_per_ch = K // len(channels.names) if len(channels.names) > 0 else K
+                names = [f"f{j}__{ch}" for j in range(n_per_ch) for ch in channels.names]
         else:
-            names = [f"f_{i}" for i in range(flat.shape[1])]
+            names = [f"f_{i}" for i in range(K)]
 
-        # Truncate or pad names to match actual width
-        if len(names) != flat.shape[1]:
-            names = [f"f_{i}" for i in range(flat.shape[1])]
+        # Safety: if name count doesn't match width, fall back
+        if len(names) != K:
+            names = [f"f_{i}" for i in range(K)]
 
-        return flat, names
+        return flat, names, leading_shape, leading_dims
 
     def fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "FeatureUnion":
         for name, tfm in self.transformers:
@@ -591,50 +644,71 @@ class FeatureUnion(Transform):
         self._is_fitted = True
         return self
 
+    @staticmethod
+    def _validate_leading(
+        entries: list[tuple[str, tuple[int, ...], tuple[Dim, ...]]],
+    ) -> None:
+        """Ensure all sub-transforms agree on leading shape and dims."""
+        first_name, first_shape, first_dims = entries[0]
+        for tname, lshape, ldims in entries[1:]:
+            if ldims != first_dims or lshape != first_shape:
+                raise ValueError(
+                    f"FeatureUnion sub-transforms have incompatible leading shapes: "
+                    f"'{first_name}' produced {first_dims} with shape {first_shape}, "
+                    f"but '{tname}' produced {ldims} with shape {lshape}. "
+                    f"All sub-transforms must share the same leading dimensions."
+                )
+
+    def _assemble(
+        self,
+        parts: list[np.ndarray],
+        all_names: list[str],
+        leading_dims: tuple[Dim, ...],
+        X: TimeTensor,
+    ) -> TimeTensor:
+        """Concatenate sub-transform outputs and build the output TimeTensor."""
+        combined = np.concatenate(parts, axis=-1)
+        out_dims = leading_dims + (Dim.FEATURE,)
+        meta = {**X.metadata, "_feature_names": all_names}
+        return TimeTensor(
+            data=combined,
+            dims=out_dims,
+            channels=all_names,
+            y=X.y,
+            metadata=meta,
+        )
+
     def transform(self, X: TimeTensor) -> TimeTensor:
         self._check_fitted()
         parts: list[np.ndarray] = []
         all_names: list[str] = []
+        leading_info: list[tuple[str, tuple[int, ...], tuple[Dim, ...]]] = []
 
         for name, tfm in self.transformers:
             result = tfm.transform(X)
-            flat, names = self._to_2d(result)
-            # Prefix feature names with transformer name
-            prefixed = [f"{name}__{n}" for n in names]
+            flat, names, lshape, ldims = self._flatten_trailing(result)
             parts.append(flat)
-            all_names.extend(prefixed)
+            all_names.extend(names)
+            leading_info.append((name, lshape, ldims))
 
-        combined = np.concatenate(parts, axis=1)
-        meta = {**X.metadata, "_feature_names": all_names}
-        return TimeTensor(
-            data=combined,
-            dims=(Dim.BATCH, Dim.FEATURE),
-            channels=all_names,
-            y=X.y,
-            metadata=meta,
-        )
+        self._validate_leading(leading_info)
+        return self._assemble(parts, all_names, leading_info[0][2], X)
 
     def fit_transform(self, X: TimeTensor, y: np.ndarray | None = None) -> TimeTensor:
         parts: list[np.ndarray] = []
         all_names: list[str] = []
+        leading_info: list[tuple[str, tuple[int, ...], tuple[Dim, ...]]] = []
 
         for name, tfm in self.transformers:
             result = tfm.fit_transform(X, y)
-            flat, names = self._to_2d(result)
-            prefixed = [f"{name}__{n}" for n in names]
+            flat, names, lshape, ldims = self._flatten_trailing(result)
             parts.append(flat)
-            all_names.extend(prefixed)
+            all_names.extend(names)
+            leading_info.append((name, lshape, ldims))
 
-        combined = np.concatenate(parts, axis=1)
+        self._validate_leading(leading_info)
         self._is_fitted = True
-        meta = {**X.metadata, "_feature_names": all_names}
-        return TimeTensor(
-            data=combined,
-            dims=(Dim.BATCH, Dim.FEATURE),
-            channels=all_names,
-            y=X.y,
-            metadata=meta,
-        )
+        return self._assemble(parts, all_names, leading_info[0][2], X)
 
     def partial_fit(self, X: TimeTensor, y: np.ndarray | None = None) -> "FeatureUnion":
         for name, tfm in self.transformers:
@@ -645,24 +719,18 @@ class FeatureUnion(Transform):
     def partial_fit_transform(self, X: TimeTensor, y: np.ndarray | None = None) -> TimeTensor:
         parts: list[np.ndarray] = []
         all_names: list[str] = []
+        leading_info: list[tuple[str, tuple[int, ...], tuple[Dim, ...]]] = []
 
         for name, tfm in self.transformers:
             result = tfm.partial_fit_transform(X, y)
-            flat, names = self._to_2d(result)
-            prefixed = [f"{name}__{n}" for n in names]
+            flat, names, lshape, ldims = self._flatten_trailing(result)
             parts.append(flat)
-            all_names.extend(prefixed)
+            all_names.extend(names)
+            leading_info.append((name, lshape, ldims))
 
-        combined = np.concatenate(parts, axis=1)
+        self._validate_leading(leading_info)
         self._is_fitted = True
-        meta = {**X.metadata, "_feature_names": all_names}
-        return TimeTensor(
-            data=combined,
-            dims=(Dim.BATCH, Dim.FEATURE),
-            channels=all_names,
-            y=X.y,
-            metadata=meta,
-        )
+        return self._assemble(parts, all_names, leading_info[0][2], X)
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         params: dict[str, Any] = {"transformers": self.transformers}

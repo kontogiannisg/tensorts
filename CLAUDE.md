@@ -12,16 +12,21 @@ Tests use a custom harness (not pytest). Run each suite directly:
 
 ```bash
 python tests/test_tensorts.py                  # 62 tests — core + all transforms
-python tests/test_feature_extractor.py         # 39 tests — multi-fn extraction + flatten naming + PER_SAMPLE
+python tests/test_feature_extractor.py         # 45 tests — multi-fn extraction + flatten naming + PER_SAMPLE + simplified API
 python tests/test_function_transform.py        # 21 tests — stateful/stateless wrapping
 python tests/test_sklearn_compat_problems.py   # 4 end-to-end sklearn integration problems
 python tests/test_partial_fit.py               # 15 tests — incremental learning
-python tests/test_feature_union.py            # 13 tests — parallel extraction + mixed scopes
+python tests/test_feature_union.py            # 18 tests — parallel extraction + mixed scopes + 4D windowed
 ```
 
 There are no single-test flags. To run one test, comment out others or extract the test function and call it directly.
 
-Each `.py` test file has a corresponding `.ipynb` notebook that mirrors it step-by-step with intermediate output for debugging.
+Each `.py` test file has a corresponding `.ipynb` notebook in `examples/` that mirrors it step-by-step with intermediate output for debugging:
+- `examples/01_Core_and_Transforms.ipynb` — mirrors `test_tensorts.py`
+- `examples/02_FunctionTransform.ipynb` — mirrors `test_function_transform.py`
+- `examples/03_FeatureExtractor.ipynb` — mirrors `test_feature_extractor.py`
+- `examples/04_Sklearn_Integration.ipynb` — mirrors `test_sklearn_compat_problems.py`
+- `examples/HAR_Classification_with_tensorts.ipynb` — end-to-end UCI HAR classification
 
 ## Architecture
 
@@ -43,7 +48,7 @@ Each `.py` test file has a corresponding `.ipynb` notebook that mirrors it step-
 
 ### sklearn Integration (`tensorts/compat.py`)
 
-`SklearnWrapper` wraps a tensorts `Pipeline` + sklearn estimator. The pipeline handles TimeTensor transforms; the wrapper flattens output to 2D numpy for the estimator. Supports `cross_val_score`, `GridSearchCV`, nested `get_params`/`set_params`.
+`SklearnWrapper` wraps a tensorts `Pipeline` + sklearn estimator. The pipeline handles TimeTensor transforms; the wrapper flattens output to 2D numpy for the estimator. Supports `cross_val_score`, `GridSearchCV`, nested `get_params`/`set_params`. Automatically decodes integer predictions back to original labels when `LabelEncoder` is in the pipeline, and aggregates window-level predictions back to sample level when `SlidingWindow(flatten_batch=True)` is used.
 
 ## Key Design Patterns
 
@@ -59,7 +64,11 @@ Each `.py` test file has a corresponding `.ipynb` notebook that mirrors it step-
 
 **Scalers compute per-channel statistics:** StandardScaler/MinMaxScaler pool across batch and time (`reduce_axes = (0, 1)`), computing one mean/std per channel. Individual samples won't span [0,1] exactly with MinMaxScaler — only the most extreme sample touches 0 or 1.
 
-**FeatureUnion — parallel extraction with mixed scopes:** `FeatureUnion` runs multiple transforms on the same input and concatenates their flattened `(B, K_i)` outputs along `Dim.FEATURE`. This enables combining per-channel statistics (`Scope.PER_CHANNEL`) with cross-channel features (`Scope.PER_SAMPLE`) inside a single `Pipeline`. Feature names are prefixed with the transformer name (e.g., `stats__mean__ax`, `cross__sma`). Works with `SklearnWrapper`, `cross_val_score`, `partial_fit`, and `get_params`/`set_params`.
+**FeatureUnion — parallel extraction with mixed scopes:** `FeatureUnion` runs multiple transforms on the same input and concatenates their outputs along `Dim.FEATURE`. It automatically detects shared leading dims (e.g., `BATCH, WINDOW`) and preserves them, only flattening trailing feature/channel dims. This enables two key workflows:
+- **3D `(B, T, C)` → `(B, K_total)`**: standard feature extraction for ML classifiers.
+- **4D `(B, W, T, C)` → `(B, W, K_total)`**: rolling features after `SlidingWindow(flatten_batch=False)` for temporal DL (Conv1D/LSTM).
+
+All sub-transforms must agree on leading dims — mixing windowed `(B, W, ...)` and non-windowed `(B, ...)` outputs raises `ValueError`. `PER_SAMPLE` extractors treat WINDOW as a leading axis: each function sees `(T, C)` per window independently. Feature names are descriptive (e.g., `mean__ax`, `cross_0`). Works with `SklearnWrapper`, `cross_val_score`, `partial_fit`, and `get_params`/`set_params`.
 
 **Incremental learning (`partial_fit`):** All transforms support `partial_fit()`. The base class falls back to `fit()` (full refit). Transforms with true incremental algorithms (StandardScaler via Welford's, MinMaxScaler, MaxAbsScaler, LabelEncoder, Interpolate) override it. `supports_partial_fit` class attribute indicates whether a transform does true incremental learning vs refitting. Pipeline chains `partial_fit_transform()` through steps. SklearnWrapper delegates to the pipeline and estimator's `partial_fit`.
 

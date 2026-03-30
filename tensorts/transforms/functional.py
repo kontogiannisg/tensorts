@@ -350,32 +350,69 @@ class StatefulFunctionTransform(Transform):
 # ======================================================================
 
 
+_OUTPUT_DIMS_UNSET = object()
+
+
 class FeatureExtractor(Transform):
-    """Extract features per channel, with single-function or multi-function support.
+    """Extract features that change dimensionality, with flexible scope.
 
-    Operates in two modes selected by which constructor argument is provided:
+    FeatureExtractor is for operations where the semantic meaning of an axis
+    changes (e.g., time → features, time → frequency).  Unlike
+    ``FunctionTransform`` (which preserves the dim schema), FeatureExtractor
+    replaces the consumed axis with new output dims.
 
+    It operates in **two modes** (select one via constructor arguments) and
+    supports **two scopes** that control what each function receives:
+
+    Modes
+    -----
     **Single-fn mode** (``fn=...``)
-        One callable that receives a 1-D vector (one channel of one sample)
-        and may return any shape.  The consumed axis (``input_dim``) is
-        replaced by ``output_dims`` in the schema.
+        One callable, arbitrary output shape.  The consumed axis
+        (``input_dim``) is replaced by ``output_dims`` in the schema.
 
-        Use this for spectrograms, STFT, wavelets, and other transforms that
-        produce multi-dimensional output per channel.
+        Use cases: spectrograms, STFT, wavelets, resampling, scalar
+        reduction (energy, RMS), or any per-sample cross-channel feature.
 
     **Multi-fn mode** (``functions=[...]``)
         A list of ``(name, fn)`` or ``(name, fn, per_fn_kwargs)`` entries.
-        Each ``fn`` receives a 1-D vector and **must** return a scalar or a
-        1-D array.  All outputs are concatenated along a new ``Dim.FEATURE``
-        axis (replacing ``input_dim``), exactly like sklearn's FeatureUnion.
+        Each ``fn`` must return a scalar or 1-D array.  All outputs are
+        concatenated along a new ``Dim.FEATURE`` axis (replacing
+        ``input_dim``).  Feature names are stored in metadata for
+        descriptive naming when followed by ``Flatten``.
 
-        Use this to replace ``StatisticalFeatures`` or ``FrameFeatureBank``
-        with plain functions, or to build custom multi-feature pipelines.
+        Use cases: statistical summaries, custom multi-feature pipelines,
+        replacing manual feature-extraction loops.
+
+    Scopes
+    ------
+    **Scope.PER_CHANNEL** (default)
+        Each function receives a **1-D array** ``(T,)`` — one channel of
+        one sample.  The CHANNEL axis is preserved in the output.  This is
+        the standard mode for per-channel statistics and spectral features.
+
+    **Scope.PER_SAMPLE**
+        Each function receives a **2-D array** ``(T, C)`` — all channels
+        of one sample at once.  The CHANNEL axis is **consumed** (the
+        function sees all channels together), so output has no CHANNEL dim.
+
+        Use cases: cross-channel features like Signal Magnitude Area (SMA),
+        acceleration magnitude ``sqrt(ax² + ay² + az²)``, inter-channel
+        correlation, or any feature that requires simultaneous access to
+        multiple channels.
+
+    To combine PER_CHANNEL and PER_SAMPLE extractors in a single pipeline,
+    use ``FeatureUnion`` which runs multiple transforms in parallel on the
+    same input and concatenates their outputs.
 
     Parameters
     ----------
     fn : callable, optional
-        *Single-fn mode only.*  ``fn(x: ndarray[T]) -> ndarray``
+        *Single-fn mode only.*  Signature depends on scope:
+
+        - ``Scope.PER_CHANNEL``: ``fn(x: ndarray[T]) -> ndarray``
+        - ``Scope.PER_SAMPLE``:  ``fn(x: ndarray[T, C]) -> ndarray``
+
+        Output shape determines ``output_dims``:
 
         - ``(T',)`` → 1-D output, axis length changes
         - ``(D1, D2, ...)`` → multi-dim, axis is replaced by new axes
@@ -385,10 +422,13 @@ class FeatureExtractor(Transform):
         Which axis the function(s) consume.  Default: ``Dim.TIME``.
 
     output_dims : tuple of Dim
-        *Single-fn mode only.*  Axes that replace ``input_dim``:
+        *Single-fn mode only.*  Axes that replace ``input_dim``.  Defaults to
+        ``(Dim.FEATURE,)`` when ``scope=PER_SAMPLE``, or ``(Dim.TIME,)``
+        when ``scope=PER_CHANNEL``.  Common values:
 
         - ``(Dim.TIME,)`` — same axis, different length
         - ``(Dim.FREQUENCY, Dim.TIME)`` — e.g. spectrogram
+        - ``(Dim.FEATURE,)`` — feature vector (common with PER_SAMPLE)
         - ``()`` — scalar, axis removed
 
     fn_args : tuple
@@ -406,63 +446,118 @@ class FeatureExtractor(Transform):
         or 1-D array; 2-D+ output raises ``ValueError``.
 
     scope : Scope
-        *Multi-fn mode only.*  Currently only ``Scope.PER_CHANNEL``
-        (default) is supported — each function receives a 1-D array for
-        one channel of one sample.
+        Controls what each function receives.  Default: ``PER_CHANNEL``.
+        See "Scopes" above for details.
 
     Attributes
     ----------
     feature_names_out_ : list of str
         Set after the first ``transform`` call (multi-fn mode).  Names are
-        ``"{fn_name}__{ch_name}"`` for scalar outputs and
-        ``"{fn_name}__{k}__{ch_name}"`` for vector outputs.
+        ``"{fn_name}"`` for scalar outputs and ``"{fn_name}__{k}"`` for
+        vector outputs.
 
     Notes
     -----
-    Lambdas and locally-defined functions are not picklable, which means
-    ``GridSearchCV(n_jobs > 1)`` will fail.  Use named functions or
-    ``functools.partial`` if you need multiprocessing.
+    - Lambdas and locally-defined functions are not picklable, which means
+      ``GridSearchCV(n_jobs > 1)`` will fail.  Use named module-level
+      functions or ``functools.partial`` for multiprocessing.
+
+    - With ``Scope.PER_SAMPLE``, the output has **no CHANNEL dim** — the
+      function is responsible for combining channel information.  For
+      multi-fn mode, feature names are used as channel labels on the
+      ``Dim.FEATURE`` axis.
+
+    - Dense and ragged inputs are supported in all mode/scope combinations.
+
+    - **4D windowed input**: With `(B, W, T, C)` from
+      ``SlidingWindow(flatten_batch=False)``, both PER_CHANNEL and PER_SAMPLE
+      treat WINDOW as a leading axis.  Each function sees one window's
+      ``(T,)`` or ``(T, C)`` independently, and the WINDOW dim is preserved.
 
     Examples
     --------
-    **Single-fn** — mel spectrogram::
+    **Single-fn, PER_CHANNEL** — mel spectrogram::
 
         FeatureExtractor(
-            fn=lambda x: librosa.feature.melspectrogram(y=x, sr=16000, n_mels=64),
+            fn=mel_spectrogram,
             input_dim=Dim.TIME,
             output_dims=(Dim.FREQUENCY, Dim.TIME),
         )
-        # (B, T, 1) → (B, 64, FRAMES, 1)
-        # (B, K, T, 1) → (B, K, 64, FRAMES, 1)   windowed input works too
+        # (B, T, C) → (B, 64, FRAMES, C)
+        # (B, W, T, C) → (B, W, 64, FRAMES, C)   windowed input works too
 
-    **Single-fn** — scalar energy per channel::
+    **Single-fn, PER_CHANNEL** — scalar energy per channel::
 
-        FeatureExtractor(fn=lambda x: np.sum(x**2), input_dim=Dim.TIME, output_dims=())
+        FeatureExtractor(fn=lambda x: np.sum(x**2), output_dims=())
         # (B, T, C) → (B, C)
 
-    **Multi-fn** — statistical summary (replaces StatisticalFeatures)::
+    **Single-fn, PER_SAMPLE** — acceleration magnitude::
+
+        def acc_magnitude(x):
+            return np.sqrt(np.sum(x**2, axis=1))  # (T, C) → (T,)
 
         FeatureExtractor(
-            functions=[
-                ("mean",   np.mean),
-                ("std",    np.std),
-                ("energy", lambda x: np.sum(x**2)),
-            ],
-            input_dim=Dim.TIME,
+            fn=acc_magnitude,
+            scope=Scope.PER_SAMPLE,
+            output_dims=(Dim.TIME,),
         )
-        # (B, T, C) → (B, 3, C)  with Dim.FEATURE axis
-        # feature_names_out_: ["mean__ch0", "mean__ch1", ..., "std__ch0", ...]
+        # (B, T, 3) → (B, T)    — channels consumed
+        # (B, W, T, 3) → (B, W, T)   — per window, channels consumed
 
-    **Multi-fn** — mix scalar + vector (replaces FrameFeatureBank)::
+    **Single-fn, PER_SAMPLE** — cross-channel feature vector::
+
+        def cross_features(x):
+            sma = float(np.mean(np.sum(np.abs(x), axis=1)))
+            mag = float(np.mean(np.linalg.norm(x, axis=1)))
+            return np.array([sma, mag])
 
         FeatureExtractor(
-            functions=[
-                ("zcr",  lambda x: np.mean(np.diff(np.signbit(x)))),  # scalar
-                ("mfcc", compute_mfcc, {"n_mfcc": 13}),               # 13-elem
-            ],
-            input_dim=Dim.TIME,
+            fn=cross_features,
+            scope=Scope.PER_SAMPLE,
         )
-        # (B, K, T, C) → (B, K, 14, C)  with Dim.FEATURE axis
+        # output_dims defaults to (Dim.FEATURE,) for PER_SAMPLE
+        # (B, T, C) → (B, 2)      — channels consumed, 2 features out
+        # (B, W, T, C) → (B, W, 2) — per window, WINDOW preserved
+
+    **Multi-fn, PER_CHANNEL** — statistical summary::
+
+        FeatureExtractor(
+            functions=[("mean", np.mean), ("std", np.std)],
+        )
+        # (B, T, C) → (B, 2, C)      with Dim.FEATURE axis
+        # (B, W, T, C) → (B, W, 2, C) — windowed input preserved
+
+    **Multi-fn, PER_SAMPLE** — cross-channel statistics::
+
+        FeatureExtractor(
+            functions=[("sma", sma_fn), ("corr", correlation_fn)],
+            scope=Scope.PER_SAMPLE,
+        )
+        # (B, T, C) → (B, 2)      — channels consumed
+        # (B, W, T, C) → (B, W, 2) — per window
+
+    **FeatureUnion — combine scopes, including 4D windowed**::
+
+        from tensorts import FeatureUnion, SlidingWindow
+
+        # 3D: standard feature extraction for ML
+        FeatureUnion([
+            ("stats", make_statistical_extractor(["mean", "std"])),
+            ("cross", FeatureExtractor(fn=cross_features,
+                                       scope=Scope.PER_SAMPLE)),
+        ])
+        # (B, T, C) → (B, 2*C + 2)
+
+        # 4D: rolling features for temporal DL
+        Pipeline([
+            ("window", SlidingWindow(size=25, stride=5, flatten_batch=False)),
+            ("features", FeatureUnion([
+                ("stats", make_statistical_extractor(["mean", "std"])),
+                ("cross", FeatureExtractor(fn=cross_features,
+                                           scope=Scope.PER_SAMPLE)),
+            ])),
+        ])
+        # (B, T, C) → (B, W, 2*C + 2) — WINDOW preserved for Conv1D/LSTM
     """
 
     supports_ragged = True
@@ -471,7 +566,7 @@ class FeatureExtractor(Transform):
         self,
         fn: Callable | None = None,
         input_dim: Dim = Dim.TIME,
-        output_dims: tuple[Dim, ...] = (Dim.TIME,),
+        output_dims: tuple[Dim, ...] | object = _OUTPUT_DIMS_UNSET,
         fn_args: tuple = (),
         fn_kwargs: dict[str, Any] | None = None,
         name: str | None = None,
@@ -481,7 +576,10 @@ class FeatureExtractor(Transform):
         super().__init__()
         self.fn = fn
         self.input_dim = input_dim
-        self.output_dims = output_dims
+        if output_dims is _OUTPUT_DIMS_UNSET:
+            self.output_dims = (Dim.FEATURE,) if scope == Scope.PER_SAMPLE else (Dim.TIME,)
+        else:
+            self.output_dims = output_dims
         self.fn_args = fn_args
         self.fn_kwargs = {} if fn_kwargs is None else fn_kwargs
         self.name = name
@@ -503,12 +601,10 @@ class FeatureExtractor(Transform):
         if functions is not None:
             if len(functions) == 0:
                 raise ValueError("'functions' must not be empty.")
-            if self.output_dims != (Dim.TIME,):
-                # output_dims was explicitly set alongside functions — that's an error
-                # (We allow the default value through because users may not set it at all)
+            if self.output_dims not in ((Dim.TIME,), (Dim.FEATURE,)):
                 raise ValueError(
-                    "'output_dims' is only used in single-fn mode. "
-                    "In multi-fn mode the output axis is always Dim.FEATURE."
+                    "'output_dims' is ignored in multi-fn mode (output is always Dim.FEATURE). "
+                    "Remove output_dims or set it to (Dim.FEATURE,)."
                 )
             # Normalise to 3-tuples (name, fn, kwargs)
             normalised = []
@@ -538,7 +634,7 @@ class FeatureExtractor(Transform):
         # Guard output_dims check: if only functions is being set (not output_dims),
         # reset output_dims to default first to avoid spurious conflict error.
         if "functions" in params and "output_dims" not in params:
-            self.output_dims = (Dim.TIME,)
+            self.output_dims = (Dim.FEATURE,) if self.scope == Scope.PER_SAMPLE else (Dim.TIME,)
         self._setup_mode()
         return self
 
@@ -769,26 +865,49 @@ class FeatureExtractor(Transform):
     # ------------------------------------------------------------------
 
     def _transform_per_sample_dense(self, X: TimeTensor) -> TimeTensor:
-        """Single-fn PER_SAMPLE: pass (T, C) per sample to fn."""
+        """Single-fn PER_SAMPLE: pass (T, C) per sample to fn.
+
+        For 4D+ input (e.g. after SlidingWindow), axes other than the
+        consumed TIME and CHANNEL are treated as leading axes and preserved.
+        The function receives ``(T, C)`` for each leading-axis combination.
+        """
         data = X.data
-        b_ax = X.axis(Dim.BATCH) if X.has_dim(Dim.BATCH) else 0
+        consumed_ax = X.axis(self.input_dim)
         ch_dim = X._find_channel_dim(X.schema)
         ch_ax = X.axis(ch_dim) if ch_dim is not None else data.ndim - 1
-        B = data.shape[b_ax]
 
-        other_axes = [i for i in range(data.ndim) if i not in (b_ax, ch_ax)]
-        perm = [b_ax] + other_axes + [ch_ax]
+        # Everything except consumed (TIME) and channel is a leading axis
+        leading_axes = [i for i in range(data.ndim) if i not in (consumed_ax, ch_ax)]
+        perm = leading_axes + [consumed_ax, ch_ax]
         transposed = np.transpose(data, perm)
-        T_merged = int(np.prod(transposed.shape[1:-1]))
-        C = transposed.shape[-1]
-        flat = transposed.reshape(B, T_merged, C)
 
-        results = [self._call_fn(flat[i]) for i in range(B)]
+        leading_shape = transposed.shape[: len(leading_axes)]
+        T = transposed.shape[-2]
+        C = transposed.shape[-1]
+        N = int(np.prod(leading_shape)) if leading_shape else 1
+        flat = transposed.reshape(N, T, C)
+
+        results = [self._call_fn(flat[i]) for i in range(N)]
         out = np.stack(results, axis=0)
 
-        new_dims = (Dim.BATCH,) + self.output_dims
-        # No channel dim in output — channels were consumed by PER_SAMPLE
-        return TimeTensor(data=out, dims=new_dims, y=X.y, metadata=X.metadata)
+        # Restore leading dims
+        out_shape = leading_shape + out.shape[1:]
+        out = out.reshape(out_shape)
+
+        leading_dims = tuple(X.dims[i] for i in leading_axes)
+        new_dims = leading_dims + self.output_dims
+
+        # Build feature names — PER_SAMPLE consumes channels, so store names
+        meta = dict(X.metadata)
+        fn_name = self.name or "feat"
+        if len(self.output_dims) == 0:
+            meta["_feature_names"] = [fn_name]
+            return TimeTensor(data=out, dims=new_dims, y=X.y, metadata=meta)
+        K = out.shape[-1] if out.ndim > 1 else 1
+        feat_names = [fn_name] if K == 1 else [f"{fn_name}_{k}" for k in range(K)]
+        meta["_feature_names"] = feat_names
+        channels = feat_names if Dim.FEATURE in self.output_dims else None
+        return TimeTensor(data=out, dims=new_dims, channels=channels, y=X.y, metadata=meta)
 
     def _transform_per_sample_ragged(self, X: TimeTensor) -> TimeTensor:
         """Single-fn PER_SAMPLE ragged: each sample is (T_i, C)."""
@@ -796,13 +915,30 @@ class FeatureExtractor(Transform):
         shapes = set(r.shape for r in results)
         new_dims = (Dim.BATCH,) + self.output_dims
 
+        # Build feature names — PER_SAMPLE consumes channels, so store names
+        meta = dict(X.metadata)
+        fn_name = self.name or "feat"
+        channels = None
+
+        if len(self.output_dims) == 0:
+            # Scalar output: (B,) — one feature per sample
+            meta["_feature_names"] = [fn_name]
+            stacked = np.stack(results, axis=0)
+            return TimeTensor(data=stacked, dims=new_dims, y=X.y, metadata=meta)
+
         if len(shapes) == 1:
+            K = results[0].shape[-1] if results[0].ndim > 0 else 1
+            feat_names = [fn_name] if K == 1 else [f"{fn_name}_{k}" for k in range(K)]
+            meta["_feature_names"] = feat_names
+            channels = feat_names if Dim.FEATURE in self.output_dims else None
+
             stacked = np.stack(results, axis=0)
             return TimeTensor(
                 data=stacked,
                 dims=new_dims,
+                channels=channels,
                 y=X.y,
-                metadata=X.metadata,
+                metadata=meta,
             )
         return X.with_ragged(results, dims=new_dims)
 
@@ -811,35 +947,44 @@ class FeatureExtractor(Transform):
     # ------------------------------------------------------------------
 
     def _transform_multi_per_sample_dense(self, X: TimeTensor) -> TimeTensor:
-        """Multi-fn PER_SAMPLE: pass (T, C) per sample to each function."""
+        """Multi-fn PER_SAMPLE: pass (T, C) per sample to each function.
+
+        Leading axes (e.g. BATCH, WINDOW) are preserved; TIME and CHANNEL
+        are consumed by the functions.
+        """
         data = X.data
-        b_ax = X.axis(Dim.BATCH) if X.has_dim(Dim.BATCH) else 0
+        consumed_ax = X.axis(self.input_dim)
         ch_dim = X._find_channel_dim(X.schema)
         ch_ax = X.axis(ch_dim) if ch_dim is not None else data.ndim - 1
-        B = data.shape[b_ax]
 
-        other_axes = [i for i in range(data.ndim) if i not in (b_ax, ch_ax)]
-        perm = [b_ax] + other_axes + [ch_ax]
+        leading_axes = [i for i in range(data.ndim) if i not in (consumed_ax, ch_ax)]
+        perm = leading_axes + [consumed_ax, ch_ax]
         transposed = np.transpose(data, perm)
-        T_merged = int(np.prod(transposed.shape[1:-1]))
+
+        leading_shape = transposed.shape[: len(leading_axes)]
+        T = transposed.shape[-2]
         C = transposed.shape[-1]
-        flat = transposed.reshape(B, T_merged, C)
+        N = int(np.prod(leading_shape)) if leading_shape else 1
+        flat = transposed.reshape(N, T, C)
 
         fn_outputs: list[np.ndarray] = []
         feature_names: list[str] = []
         for fname, fn, kwargs in self._functions_normalized:
             probe = np.asarray(fn(flat[0], **kwargs)).ravel()
             K_i = probe.size
-            fn_out = np.empty((B, K_i), dtype=probe.dtype)
+            fn_out = np.empty((N, K_i), dtype=probe.dtype)
             fn_out[0] = probe
-            for n in range(1, B):
+            for n in range(1, N):
                 fn_out[n] = np.asarray(fn(flat[n], **kwargs)).ravel()
             fn_outputs.append(fn_out)
             for k in range(K_i):
                 feature_names.append(fname if K_i == 1 else f"{fname}__{k}")
 
-        combined = np.concatenate(fn_outputs, axis=1)  # (B, K_total)
-        new_dims = (Dim.BATCH, Dim.FEATURE)
+        combined = np.concatenate(fn_outputs, axis=1)  # (N, K_total)
+        combined = combined.reshape(leading_shape + (combined.shape[-1],))
+
+        leading_dims = tuple(X.dims[i] for i in leading_axes)
+        new_dims = leading_dims + (Dim.FEATURE,)
         self.feature_names_out_ = feature_names
         meta = {**X.metadata, "_feature_names": feature_names}
         return TimeTensor(

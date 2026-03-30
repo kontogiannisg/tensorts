@@ -46,6 +46,15 @@ class SklearnWrapper(_BaseEstimator):
     The wrapper's fit/predict/score methods accept TimeTensor directly —
     sklearn CV splitters work because TimeTensor supports batch-axis indexing.
 
+    Handles two common y-mismatch scenarios automatically:
+
+    - **LabelEncoder**: when the pipeline encodes string labels to integers,
+      ``predict()`` decodes predictions back to the original label space so
+      sklearn scorers (including ``scoring='accuracy'``) compare like with like.
+    - **SlidingWindow**: when ``flatten_batch=True`` expands B samples into
+      B×K windows, ``predict()`` aggregates window-level predictions back to
+      sample level, and ``score()`` uses the expanded ``Xt.y`` for evaluation.
+
     Parameters
     ----------
     pipeline : tensorts Pipeline
@@ -56,19 +65,21 @@ class SklearnWrapper(_BaseEstimator):
 
     Examples
     --------
-    # cross_val_score
-    wrapper = SklearnWrapper(pipeline, RandomForestClassifier())
-    scores = cross_val_score(wrapper, X, y, cv=StratifiedKFold(5))
+    # cross_val_score with string labels
+    pipe = Pipeline([('enc', LabelEncoder()), ('scaler', StandardScaler()), ...])
+    wrapper = SklearnWrapper(pipe, RandomForestClassifier())
+    scores = cross_val_score(wrapper, X, y=X.y, cv=StratifiedKFold(5), scoring='accuracy')
 
     # GridSearchCV
     param_grid = {"pipeline__scaler__eps": [1e-6, 1e-8], "estimator__n_estimators": [50, 100]}
     gs = GridSearchCV(wrapper, param_grid, cv=5)
-    gs.fit(X, y)
+    gs.fit(X, y=X.y)
     """
 
     def __init__(self, pipeline: "Pipeline", estimator: Any) -> None:
         self.pipeline = pipeline
         self.estimator = estimator
+        self._label_classes: np.ndarray | None = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -99,6 +110,12 @@ class SklearnWrapper(_BaseEstimator):
             y = Xt.y
         X_np = Xt.data.reshape(Xt.n_samples, -1)
         self.estimator.fit(X_np, y)
+        # Cache label encoder inverse mapping so predict() can decode back
+        self._label_classes = None
+        for _name, step in self.pipeline.steps:
+            if hasattr(step, "classes_") and hasattr(step, "_class_to_idx"):
+                self._label_classes = step.classes_
+                break
         return self
 
     def partial_fit(self, X: "TimeTensor", y=None, **kwargs) -> "SklearnWrapper":
@@ -108,6 +125,10 @@ class SklearnWrapper(_BaseEstimator):
             y = Xt.y
         X_np = Xt.data.reshape(Xt.n_samples, -1)
         self.estimator.partial_fit(X_np, y, **kwargs)
+        for _name, step in self.pipeline.steps:
+            if hasattr(step, "classes_") and hasattr(step, "_class_to_idx"):
+                self._label_classes = step.classes_
+                break
         return self
 
     def _aggregate_window_preds(self, preds: np.ndarray, Xt: "TimeTensor", n_original: int) -> np.ndarray:
@@ -131,7 +152,14 @@ class SklearnWrapper(_BaseEstimator):
         Xt = self.pipeline.transform(X)
         X_np = Xt.data.reshape(Xt.n_samples, -1)
         preds = self.estimator.predict(X_np)
-        return self._aggregate_window_preds(preds, Xt, X.n_samples)
+        preds = self._aggregate_window_preds(preds, Xt, X.n_samples)
+        # Decode integer predictions back to original labels if LabelEncoder was used
+        if self._label_classes is not None:
+            try:
+                preds = self._label_classes[preds.astype(int)]
+            except (IndexError, ValueError):
+                pass  # predictions already in original space
+        return preds
 
     def predict_proba(self, X: "TimeTensor") -> np.ndarray:
         Xt = self.pipeline.transform(X)
@@ -151,9 +179,9 @@ class SklearnWrapper(_BaseEstimator):
         y_external = self._labels(X, y)
         Xt = self.pipeline.transform(X)
         X_np = Xt.data.reshape(Xt.n_samples, -1)
-        # Use Xt.y when the pipeline changed the sample count (e.g. SlidingWindow).
-        # The estimator was trained on the expanded labels, so scoring must use them too.
-        y_score = Xt.y if Xt.y is not None and (y_external is None or len(Xt.y) != len(y_external)) else y_external
+        # Always prefer pipeline-transformed y (Xt.y) — it reflects any encoding
+        # (LabelEncoder) or sample expansion (SlidingWindow) applied during transform.
+        y_score = Xt.y if Xt.y is not None else y_external
         return self.estimator.score(X_np, y_score)
 
     # ------------------------------------------------------------------
