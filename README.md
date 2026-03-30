@@ -525,40 +525,12 @@ All sub-transforms must agree on leading dims. Mixing windowed `(B, W, ...)` and
 
 ## sklearn integration via SklearnWrapper
 
-`SklearnWrapper` bridges a tensorts `Pipeline` with sklearn CV tools. It handles two `y` mismatch scenarios automatically:
+`SklearnWrapper` bridges a tensorts `Pipeline` with sklearn's `cross_val_score`, `GridSearchCV`, and `clone`. It handles label mismatches automatically:
 
-- **LabelEncoder**: when the pipeline encodes string labels to integers, `predict()` decodes predictions back to original labels so sklearn scorers compare like with like.
-- **SlidingWindow**: when windowing expands B samples into B×K windows, the wrapper uses `Xt.y` for the expanded label count and aggregates window-level predictions back to sample level.
+- **LabelEncoder**: `predict()` decodes integer predictions back to original string labels so sklearn scorers compare like with like.
+- **SlidingWindow**: when windowing expands B samples into B×K windows, `predict()` aggregates window-level predictions back to sample level.
 
-```python
-from tensorts import SklearnWrapper
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import cross_val_score, GridSearchCV
-
-preprocessing = Pipeline([
-    ('scale',  StandardScaler()),
-    ('window', SlidingWindow(size=128, stride=64, flatten_batch=True, label_strategy='repeat')),
-    ('fe',     make_statistical_extractor(['mean', 'std', 'rms'])),
-    ('flat',   Flatten()),
-])
-
-wrapper = SklearnWrapper(preprocessing, RandomForestClassifier(n_estimators=100))
-
-# cross_val_score — pass X and y separately (sklearn slices both independently)
-scores = cross_val_score(wrapper, X, y=X.y, cv=StratifiedKFold(5))
-
-# GridSearchCV — nested parameter format
-param_grid = {
-    'pipeline__window__size': [64, 128, 256],
-    'pipeline__window__stride': [32, 64],
-    'estimator__n_estimators': [50, 100, 200],
-}
-gs = GridSearchCV(wrapper, param_grid, cv=5, scoring='accuracy')
-gs.fit(X, y=X.y)
-print(gs.best_params_)
-```
-
-**How it handles y transformations**: `fit()` always uses the pipeline-transformed `Xt.y` for training, and `score()` does the same for evaluation. When `LabelEncoder` encodes string labels to integers, `predict()` inverse-transforms predictions back to the original label space — this is critical for `cross_val_score(scoring='accuracy')` where sklearn compares predictions against the original (un-encoded) labels. When `SlidingWindow(flatten_batch=True)` expands B samples into B×K windows, `predict()` averages window-level predictions back to sample level using `_window_counts` stored in metadata.
+See the [HAR example](#har--from-raw-recordings-to-trained-classifier) above for full `cross_val_score` and `GridSearchCV` usage.
 
 ---
 
@@ -603,73 +575,150 @@ Check `transform.supports_partial_fit` at runtime to see if a transform does tru
 
 ## End-to-end examples
 
-### HAR (Human Activity Recognition) — ragged recordings
+### HAR — from raw recordings to trained classifier
+
+A complete HAR pipeline: ragged variable-length recordings → preprocessing → feature extraction → sklearn classifier — with labels, channel names, and metadata flowing through automatically.
 
 ```python
+import numpy as np
+from scipy.stats import skew, kurtosis
+
 from tensorts import (
-    TimeTensor, Pipeline, ChannelTransform,
-    StandardScaler, RobustScaler, SlidingWindow, Flatten,
-    temporal_split, make_statistical_extractor,
+    TimeTensor, Dim, Pipeline, Scope,
+    FunctionTransform, StandardScaler, LabelEncoder,
+    FeatureExtractor, FeatureUnion, Flatten,
+    SklearnWrapper, make_statistical_extractor,
 )
 
-# Ragged: each recording has a different length
-ts = TimeTensor.from_ragged(
-    recordings,
+# --- Data: 6-axis IMU, variable-length recordings ---
+ts = TimeTensor(
+    data=windows,  # (7352, 128, 6) or ragged
+    dims=(Dim.BATCH, Dim.TIME, Dim.CHANNEL),
     channels=['acc_x', 'acc_y', 'acc_z', 'gyro_x', 'gyro_y', 'gyro_z'],
     channel_groups={'acc': 'acc_*', 'gyro': 'gyro_*'},
-    y=activity_labels,
+    y=activity_labels,       # string labels like 'WALKING', 'SITTING'
     metadata={'sampling_rate': 50},
 )
 
-train, test = temporal_split(ts, test_ratio=0.2)
+# --- Feature functions ---
+def moving_average(x, k=5):
+    return np.convolve(x, np.ones(k) / k, mode='same')
 
-pipe = Pipeline([
-    ('scale',  ChannelTransform({'acc': StandardScaler(), 'gyro': RobustScaler()})),
-    ('window', SlidingWindow(size=128, stride=64, flatten_batch=True, label_strategy='repeat')),
-    ('stats',  make_statistical_extractor(['mean', 'std', 'rms', 'skew', 'kurtosis'])),
-    ('flat',   Flatten()),
-])
+def dominant_freq(x, fs=50):
+    fft = np.abs(np.fft.rfft(x))
+    freqs = np.fft.rfftfreq(len(x), 1.0 / fs)
+    return float(freqs[np.argmax(fft[1:]) + 1])
 
-X_train = pipe.fit_transform(train)   # y embedded in train, no separate y needed
-X_test  = pipe.transform(test)
-
-# 5 stats × 6 channels = 30 features per window
-print(X_train.shape)   # (n_windows, 30)
-print(X_train.y)       # window-level labels
-```
-
-### HAR — rolling features for 1D temporal deep learning
-
-```python
-from tensorts import (
-    TimeTensor, Dim, Pipeline, Scope, StandardScaler,
-    SlidingWindow, FeatureUnion, FeatureExtractor,
-    make_statistical_extractor, LabelEncoder,
-)
+def spectral_energy(x):
+    return float(np.sum(np.abs(np.fft.rfft(x)) ** 2))
 
 def cross_channel_features(x):
-    """x is (T, C) per window — compute cross-channel features."""
+    """x is (T, C) — all channels at once."""
     acc_mag = float(np.mean(np.linalg.norm(x[:, :3], axis=1)))
     gyro_mag = float(np.mean(np.linalg.norm(x[:, 3:], axis=1)))
     sma = float(np.mean(np.sum(np.abs(x), axis=1)))
     return np.array([acc_mag, gyro_mag, sma])
 
-pipe = Pipeline([
+# --- Pipeline: filter → scale → extract 70 features per sample ---
+preprocessing = Pipeline([
     ('label_enc', LabelEncoder()),
+    ('filter',    FunctionTransform(fn=moving_average, scope=Scope.PER_CHANNEL,
+                                    fn_kwargs={'k': 5})),
+    ('scaler',    StandardScaler()),
+    ('features',  FeatureUnion([
+        ('stats', make_statistical_extractor(['mean', 'std', 'rms', 'skew',
+                                              'kurtosis', 'zcr', 'iqr'])),
+        ('freq',  FeatureExtractor(functions=[
+                      ('dom_freq', dominant_freq), ('spec_energy', spectral_energy),
+                  ])),
+        ('cross', FeatureExtractor(fn=cross_channel_features,
+                                   scope=Scope.PER_SAMPLE, name='cross')),
+    ])),
+    ('flat', Flatten()),
+])
+
+# --- Train & evaluate with sklearn (one line) ---
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+
+wrapper = SklearnWrapper(preprocessing, RandomForestClassifier(n_estimators=200))
+scores = cross_val_score(wrapper, ts, y=ts.y, cv=StratifiedKFold(5), scoring='accuracy')
+# 5-Fold CV Accuracy: 0.85 ± 0.04
+```
+
+What just happened:
+- `LabelEncoder` converted string labels to integers; `predict()` decodes them back automatically
+- `FunctionTransform` applied a smoothing filter to each channel independently
+- `FeatureUnion` ran three extractors in parallel and concatenated: 7 stats × 6 ch + 2 freq × 6 ch + 3 cross = **57 features**
+- `Flatten` collapsed `(B, FEATURE, CHANNEL)` into `(B, 57)` with descriptive names like `mean__acc_x`, `dom_freq__gyro_z`, `cross_0`
+- `SklearnWrapper` handled the TimeTensor→numpy conversion, label encoding/decoding, and sklearn compatibility
+
+### Same pipeline → temporal DL (Conv1D / LSTM)
+
+Replace `Flatten()` with `SlidingWindow(flatten_batch=False)` to produce frame-level sequences for 1D CNNs or LSTMs — the same feature extractors work on 4D input automatically.
+
+```python
+from tensorts import SlidingWindow
+
+# Move SlidingWindow BEFORE features, remove Flatten
+temporal_pipe = Pipeline([
+    ('label_enc', LabelEncoder()),
+    ('filter',    FunctionTransform(fn=moving_average, scope=Scope.PER_CHANNEL,
+                                    fn_kwargs={'k': 5})),
     ('scaler',    StandardScaler()),
     ('window',    SlidingWindow(size=25, stride=5, flatten_batch=False)),
     ('features',  FeatureUnion([
         ('stats', make_statistical_extractor(['mean', 'std', 'rms', 'zcr'])),
         ('cross', FeatureExtractor(fn=cross_channel_features,
-                                   scope=Scope.PER_SAMPLE,
-                                   name='cross')),
+                                   scope=Scope.PER_SAMPLE, name='cross')),
     ])),
 ])
-result = pipe.fit_transform(ts)
+X_temporal = temporal_pipe.fit_transform(ts)
 # (7352, 128, 6) → (7352, 21, 27)
-#   21 windows (stride=5 over 128 timesteps with size=25)
-#   27 features per window: 4 stats × 6 channels + 3 cross-channel
-# Ready for Conv1d(in_channels=27, ...) or LSTM(input_size=27, ...)
+#   21 windows × 27 features (4 stats × 6 ch + 3 cross)
+#   Ready for Conv1d(in_channels=27) or LSTM(input_size=27)
+
+import torch
+X_tensor = torch.FloatTensor(X_temporal.numpy()).permute(0, 2, 1)  # (B, 27, 21)
+```
+
+The key difference: `SlidingWindow(flatten_batch=False)` creates a `(B, W, T, C)` tensor where WINDOW is a leading axis. `FeatureUnion` detects the shared leading dims `(B, W)` and preserves them — each extractor sees one window's `(T, C)` at a time. No code changes needed in the feature functions.
+
+### GridSearchCV — tune pipeline and estimator together
+
+```python
+from sklearn.model_selection import GridSearchCV
+
+wrapper = SklearnWrapper(preprocessing, RandomForestClassifier())
+
+param_grid = {
+    'pipeline__scaler__eps': [1e-6, 1e-8],
+    'pipeline__features__stats__functions': [
+        [('mean', np.mean), ('std', np.std)],
+        [('mean', np.mean), ('std', np.std), ('rms', rms_fn)],
+    ],
+    'estimator__n_estimators': [100, 200],
+    'estimator__max_depth': [15, 20, None],
+}
+gs = GridSearchCV(wrapper, param_grid, cv=3, scoring='accuracy')
+gs.fit(ts, y=ts.y)
+print(gs.best_params_)
+```
+
+Nested `pipeline__step__param` notation reaches into any transform. sklearn's `clone()` works because every tensorts transform implements `get_params` / `set_params`.
+
+### Deploy with joblib
+
+```python
+import joblib
+
+# Train final model
+wrapper.fit(ts, y=ts.y)
+joblib.dump(wrapper, 'har_model.joblib')
+
+# Load and predict — no manual preprocessing needed
+loaded = joblib.load('har_model.joblib')
+predictions = loaded.predict(new_data)  # TimeTensor in, labels out
 ```
 
 ### Audio — mel spectrogram pipeline
@@ -696,35 +745,6 @@ pipe = Pipeline([
 ])
 result = pipe.fit_transform(ts)
 # (B, 16000, 1) → (B, 64, 97, 1)  — 64 mel bins × 97 frames
-```
-
-### Custom feature extraction with FeatureExtractor
-
-```python
-from tensorts import FeatureExtractor, Dim
-
-# Single-fn: compute STFT per channel
-stft_fe = FeatureExtractor(
-    fn=lambda x: np.abs(np.fft.rfft(x, n=512)) ** 2,
-    input_dim=Dim.TIME,
-    output_dims=(Dim.FREQUENCY,),
-    name='power_spectrum',
-)
-# (B, T, C) → (B, 257, C)
-
-# Multi-fn: statistical + spectral features
-fe = FeatureExtractor(
-    functions=[
-        ('mean',   np.mean),
-        ('std',    np.std),
-        ('energy', lambda x: float(np.sum(x**2))),
-        ('zcr',    lambda x: float(np.mean(np.diff(np.signbit(x))))),
-    ],
-    input_dim=Dim.TIME,
-)
-result = fe.fit_transform(ts)
-# (B, T, C) → (B, 4, C)   — 4 features per channel
-print(fe.feature_names_out_)  # ['mean', 'std', 'energy', 'zcr']
 ```
 
 ### Custom preprocessing with FunctionTransform
